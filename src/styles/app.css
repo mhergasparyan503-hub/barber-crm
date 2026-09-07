@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --color-accent: #ff7900;
+  --color-journal: #f0f2f5;
+  --color-sidebar: #2b2d33;
+}
+
+html, body, #root {
+  height: 100%;
+  font-family: var(--font-sans);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.touch-btn {
+  min-height: 44px;
+}
