@@ -1,0 +1,9 @@
+node_modules
+dist
+.DS_Store
+*.local
+dev-dist
+data/crm-snapshot.json
+data/crm-snapshot.json.tmp
+.env
+.env.*
