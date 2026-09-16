@@ -62,6 +62,32 @@ export async function sendMessage(
   return res;
 }
 
+
+export async function editMessageText(
+  token: string,
+  chatId: string | number,
+  messageId: number,
+  text: string,
+  reply_markup?: unknown,
+) {
+  if (process.env.TG_SMOKE_CAPTURE === '1') {
+    const g = globalThis as any;
+    g.__tgSent = g.__tgSent || [];
+    g.__tgSent.push({ chatId: String(chatId), text, reply_markup, edit: messageId });
+    return { ok: true, result: { message_id: messageId } };
+  }
+  const res = await tg(token, 'editMessageText', {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    reply_markup,
+  });
+  if (res && res.ok === false) {
+    console.error('tg editMessageText fail', res.error_code, res.description);
+  }
+  return res;
+}
+
 export async function answerCallback(token: string, id: string, text?: string) {
   if (process.env.TG_SMOKE_CAPTURE === '1') {
     return { ok: true };

@@ -1,4 +1,4 @@
-import { sendMessage, answerCallback, getUpdates } from './telegram-api';
+import { sendMessage, editMessageText, answerCallback, getUpdates } from './telegram-api';
 import { parseApStart, mskWallISO, mskParts, reminderAtBefore, morningReminderAt } from './msk';
 import { claimUpdateId } from './tg-dedup';
 
@@ -50,6 +50,7 @@ const OW_PHONE = '🔍 Поиск по телефону';
 const OW_SHARE = '🔗 Поделиться ссылкой';
 const OW_CLIENTS = '👥 Клиенты';
 const OW_TODAY = '📍 Сегодня';
+const OW_APPTS = '📋 Записи';
 
 /** Match ReplyKeyboard tap: emoji label or plain legacy label. */
 function menuPlain(label: string): string {
@@ -108,10 +109,10 @@ function isOwnerChat(crm: Crm, chatId: string): boolean {
 
 function ownerReplyKeyboard() {
   return replyKb([
-    [rbtn(OW_BOOK), rbtn(OW_TODAY)],
-    [rbtn(OW_SCHED), rbtn(OW_MOVE)],
-    [rbtn(OW_PHONE), rbtn(OW_SHARE)],
-    [rbtn(OW_CLIENTS)],
+    [rbtn(OW_BOOK), rbtn(OW_APPTS)],
+    [rbtn(OW_TODAY), rbtn(OW_MOVE)],
+    [rbtn(OW_SCHED), rbtn(OW_PHONE)],
+    [rbtn(OW_SHARE), rbtn(OW_CLIENTS)],
   ]);
 }
 
@@ -120,7 +121,7 @@ async function sendOwnerMenu(token: string, chatId: string, crm: Crm, text?: str
     token,
     chatId,
     text ||
-      'Меню мастера.\nКнопки внизу: записать клиента, график, перенос, поиск, ссылка.\n/clients — написать клиенту · /cancel — сброс адресата.',
+      'Меню мастера.\nКнопки внизу: записать, записи, график, перенос, поиск, ссылка.\n/clients — написать клиенту · /cancel — сброс адресата.',
     ownerReplyKeyboard(),
   );
 }
@@ -284,6 +285,82 @@ async function showOwnerToday(token: string, chatId: string, crm: Crm) {
   await sendMessage(token, chatId, `Сегодня ${today}:\n${lines}`, ownerReplyKeyboard());
 }
 
+const OW_APPTS_PAGE = 5;
+
+function upcomingAppointmentsAll(crm: Crm) {
+  const now = new Date();
+  return (crm.appointments || [])
+    .filter((a) => isBookedStatus(a.status) && parseApStart(apStart(a)) > now)
+    .sort((a, b) => +parseApStart(apStart(a)) - +parseApStart(apStart(b)));
+}
+
+function formatOwnerApptBlock(crm: Crm, a: any, index: number): string {
+  const c = crm.clients.find((x) => x.id === a.clientId);
+  const svc = crm.services.find((s) => a.serviceIds?.includes(s.id));
+  const start = parseApStart(apStart(a));
+  const p = mskParts(start);
+  const wd = weekdayRu(start);
+  const when = wd ? `${wd}, ${p.date} в ${p.time}` : `${p.date} в ${p.time}`;
+  return (
+    `${index}. ${c?.name || 'Клиент'}\n` +
+    `📞 ${c?.phone || '—'}\n` +
+    `✂️ ${svc?.name || 'услуга'}\n` +
+    `🗓 ${when}`
+  );
+}
+
+/** Master «📋 Записи»: nearest upcoming, page size 5, inline Написать/Отменить/Перенести + pagination. */
+async function showOwnerUpcomingAppointments(
+  token: string,
+  chatId: string,
+  crm: Crm,
+  page = 0,
+  editMessageId?: number,
+) {
+  const list = upcomingAppointmentsAll(crm);
+  if (!list.length) {
+    const empty = 'Нет ближайших записей.';
+    if (editMessageId) {
+      await editMessageText(token, chatId, editMessageId, empty, kb([[btn('« 📋 Меню', 'ow:menu')]]));
+    } else {
+      await sendMessage(token, chatId, empty, ownerReplyKeyboard());
+    }
+    return;
+  }
+  const pageSize = OW_APPTS_PAGE;
+  const totalPages = Math.max(1, Math.ceil(list.length / pageSize));
+  const p = Math.max(0, Math.min(page, totalPages - 1));
+  const slice = list.slice(p * pageSize, p * pageSize + pageSize);
+  const from = p * pageSize + 1;
+  const to = p * pageSize + slice.length;
+  const header = `📋 Ближайшие записи (${from}–${to} из ${list.length}) · стр. ${p + 1}/${totalPages}`;
+  const body = slice.map((a, i) => formatOwnerApptBlock(crm, a, from + i)).join('\n\n');
+  const text = `${header}\n\n${body}`;
+
+  const rows: { text: string; callback_data: string }[][] = [];
+  slice.forEach((a, i) => {
+    const n = from + i;
+    const sid = a.id.slice(-10);
+    rows.push([
+      btn(`✉️ Написать · ${n}`.slice(0, 64), `ow:msg:${sid}`),
+      btn(`❌ Отменить · ${n}`.slice(0, 64), `ow:cl:${sid}`),
+      btn(`🔁 Перенести · ${n}`.slice(0, 64), `ow:mv:${sid}`),
+    ]);
+  });
+  const nav: { text: string; callback_data: string }[] = [];
+  if (p > 0) nav.push(btn('◀️ Назад', `ow:apg:${p - 1}`));
+  if (p < totalPages - 1) nav.push(btn('▶️ Следующие', `ow:apg:${p + 1}`));
+  if (nav.length) rows.push(nav);
+  rows.push([btn('« 📋 Меню', 'ow:menu')]);
+
+  const markup = kb(rows);
+  if (editMessageId) {
+    await editMessageText(token, chatId, editMessageId, text, markup);
+  } else {
+    await sendMessage(token, chatId, text, markup);
+  }
+}
+
 async function shareBotLink(token: string, chatId: string, crm: Crm) {
   const uname = botUsername(crm);
   const base = publicBaseUrl(crm);
@@ -420,6 +497,10 @@ async function handleOwnerMenuText(
   }
   if (menuEq(text, OW_TODAY)) {
     await showOwnerToday(token, chatId, crm);
+    return true;
+  }
+  if (menuEq(text, OW_APPTS, 'Записи', 'Ближайшие записи', '📋 Ближайшие записи')) {
+    await showOwnerUpcomingAppointments(token, chatId, crm, 0);
     return true;
   }
   return false;
@@ -1185,6 +1266,18 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
   if (data === 'ow:noop' || data === 'bk:noop') {
     return;
   }
+  if (data.startsWith('ow:apg:')) {
+    const page = Number(data.slice(7));
+    const msgId = cq.message?.message_id;
+    await showOwnerUpcomingAppointments(
+      token,
+      chatId,
+      crm,
+      Number.isFinite(page) ? page : 0,
+      typeof msgId === 'number' ? msgId : undefined,
+    );
+    return;
+  }
   if (data === 'bk:go') {
     await startBookingServices(token, chatId, crm);
     return;
@@ -1523,7 +1616,16 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
     const client = crm.clients.find((c) => c.id === ap?.clientId);
     if (client?.telegramChatId) {
       (crm.settings as any)._replyTo = client.telegramChatId;
-      await sendMessage(token, chatId, `Пишите клиенту ${client.name}.`);
+      await sendMessage(token, chatId, `Пишите клиенту ${client.name}. /cancel — сброс.`);
+    } else {
+      await sendMessage(
+        token,
+        chatId,
+        client
+          ? `У клиента ${client.name} нет Telegram — напишите или позвоните: ${client.phone || '—'}`
+          : 'Клиент не найден.',
+        ownerReplyKeyboard(),
+      );
     }
     return;
   }

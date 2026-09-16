@@ -67,6 +67,7 @@ assert(crm.settings.telegramOwnerChatId === '999', 'owner set');
   assert(hasLabel(oflat, 'Поиск по телефону'), 'owner phone btn');
   assert(hasLabel(oflat, 'Поделиться ссылкой'), 'owner share btn');
   assert(hasLabel(oflat, 'Записать'), 'owner book btn');
+  assert(hasLabel(oflat, 'Записи'), 'owner upcoming appts btn');
   assert(!hasLabel(oflat, 'Записаться'), 'owner kb is not client kb');
   console.log('OK owner via start=owner + owner ReplyKeyboard', oflat.join(' | '));
 }
@@ -270,6 +271,102 @@ r = await handleUpdate(crm, {
 Object.assign(crm, r.patch);
 assert(last().text.includes('Иван') || last().text.includes('999'), 'phone search hit');
 console.log('OK owner phone search');
+
+// 5b2) owner «📋 Записи» — paginated upcoming with write/cancel/reschedule
+{
+  // Dedicated clients so list appts do not become nearest for chat 111 cancel tests
+  if (!crm.clients.some((c) => c.id === 'c_list_a')) {
+    crm.clients.push({
+      id: 'c_list_a',
+      name: 'Анна Список',
+      phone: '+79990001101',
+      telegramChatId: '77701',
+    });
+  }
+  if (!crm.clients.some((c) => c.id === 'c_list_b')) {
+    crm.clients.push({
+      id: 'c_list_b',
+      name: 'Борис Список',
+      phone: '+79990001102',
+      // no telegram — covers «нет Telegram» path optionally
+    });
+  }
+  const base = Date.now() + 2 * 3600 * 1000;
+  for (let i = 0; i < 7; i++) {
+    const t = new Date(base + i * 3600 * 1000);
+    const p = mskParts(t);
+    crm.appointments.push({
+      id: `ap_list_${String(i).padStart(2, '0')}_abcdef`,
+      clientId: i % 2 === 0 ? 'c_list_a' : 'c_list_b',
+      staffId: 'staff_barber',
+      serviceIds: ['svc_cut'],
+      start: mskWallISO(p.date, p.time),
+      durationMin: 45,
+      status: 'waiting',
+      source: 'telegram',
+    });
+  }
+  g.__tgSent = [];
+  r = await handleUpdate(crm, {
+    update_id: 551,
+    message: { chat: { id: 999 }, text: '📋 Записи', from: { username: 'boss' } },
+  });
+  Object.assign(crm, r.patch);
+  const listMsg = last();
+  assert(String(listMsg.text || '').includes('Ближайшие записи'), 'list header');
+  assert(/1–5 из \d+/.test(String(listMsg.text || '')), 'page 1 shows 1–5');
+  assert(String(listMsg.text || '').includes('стр. 1/'), 'page 1 indicator');
+  const ik = listMsg.reply_markup?.inline_keyboard || [];
+  const flatIk = ik.flat().map((b) => b.text);
+  assert(hasLabel(flatIk, 'Написать'), 'write btn');
+  assert(hasLabel(flatIk, 'Отменить'), 'cancel btn');
+  assert(hasLabel(flatIk, 'Перенести'), 'reschedule btn');
+  assert(hasLabel(flatIk, 'Следующие'), 'next page btn');
+  assert(!hasLabel(flatIk, 'Назад'), 'no back on first page');
+  const nextBtn = ik.flat().find((b) => String(b.text || '').includes('Следующие'));
+  assert(nextBtn?.callback_data === 'ow:apg:1', 'next → page 1');
+  // pagination edit
+  g.__tgSent = [];
+  r = await handleUpdate(crm, {
+    update_id: 552,
+    callback_query: {
+      id: 'owapg1',
+      data: 'ow:apg:1',
+      from: { username: 'boss' },
+      message: { chat: { id: 999 }, message_id: 42 },
+    },
+  });
+  Object.assign(crm, r.patch);
+  const page2 = last();
+  assert(page2.edit === 42, 'pagination edits same message');
+  assert(/6–\d+ из \d+/.test(String(page2.text || '')), 'page 2 starts at 6');
+  assert(String(page2.text || '').includes('стр. 2/'), 'page 2 indicator');
+  const flat2 = (page2.reply_markup?.inline_keyboard || []).flat().map((b) => b.text);
+  assert(hasLabel(flat2, 'Назад'), 'back on page 2');
+  // last page only if total <= 10 (we seeded 7 + prior); if more pages, Следующие may remain
+  if (String(page2.text || '').match(/стр\. 2\/(\d+)/)?.[1] === '2') {
+    assert(!hasLabel(flat2, 'Следующие'), 'no next on last page');
+  }
+  // Написать wires replyTo
+  const writeBtn = ik.flat().find((b) => String(b.callback_data || '').startsWith('ow:msg:'));
+  assert(writeBtn, 'ow:msg callback present');
+  g.__tgSent = [];
+  r = await handleUpdate(crm, {
+    update_id: 553,
+    callback_query: {
+      id: 'owmsg1',
+      data: writeBtn.callback_data,
+      from: { username: 'boss' },
+      message: { chat: { id: 999 } },
+    },
+  });
+  Object.assign(crm, r.patch);
+  assert(
+    crm.settings._replyTo || (last().text || '').includes('Пишите') || (last().text || '').includes('нет Telegram'),
+    'write starts messaging or explains no TG',
+  );
+  console.log('OK owner Записи list + pagination + actions');
+}
 
 // 5c) owner «Записать» — same order as clients, then client name+phone (any client)
 g.__tgSent = [];

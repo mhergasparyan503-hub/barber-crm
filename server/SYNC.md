@@ -37,6 +37,7 @@ Preview has no public URL, so Telegram cannot push webhooks here. For testing Re
 When `chatId === settings.telegramOwnerChatId`, bot shows persistent owner menu (not client Записаться):
 
 - **Записать** — same booking order as clients (service → date → time → confirm), then always asks client name + phone (walk-in / any client). Reuses CRM client by phone or creates new; does not require client Telegram. Reminder prompt after (delivery when client has chat).
+- **Записи** — nearest upcoming appointments (MSK), page size 5; per row Написать / Отменить / Перенести (`ow:msg` / `ow:cl` / `ow:mv`); pagination `ow:apg:N` (◀️ Назад / ▶️ Следующие).
 - Изменить график на день
 - Перенести клиента
 - Поиск по телефону
