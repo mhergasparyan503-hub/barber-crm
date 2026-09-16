@@ -66,6 +66,7 @@ assert(crm.settings.telegramOwnerChatId === '999', 'owner set');
   assert(hasLabel(oflat, 'Перенести клиента'), 'owner move btn');
   assert(hasLabel(oflat, 'Поиск по телефону'), 'owner phone btn');
   assert(hasLabel(oflat, 'Поделиться ссылкой'), 'owner share btn');
+  assert(hasLabel(oflat, 'Записать'), 'owner book btn');
   assert(!hasLabel(oflat, 'Записаться'), 'owner kb is not client kb');
   console.log('OK owner via start=owner + owner ReplyKeyboard', oflat.join(' | '));
 }
@@ -269,6 +270,135 @@ r = await handleUpdate(crm, {
 Object.assign(crm, r.patch);
 assert(last().text.includes('Иван') || last().text.includes('999'), 'phone search hit');
 console.log('OK owner phone search');
+
+// 5c) owner «Записать» — same order as clients, then client name+phone (any client)
+g.__tgSent = [];
+const apCountBefore = crm.appointments.length;
+const clientsBefore = crm.clients.length;
+r = await handleUpdate(crm, {
+  update_id: 560,
+  message: { chat: { id: 999 }, text: '📝 Записать', from: { username: 'boss' } },
+});
+Object.assign(crm, r.patch);
+assert(last().reply_markup?.inline_keyboard, 'owner book → services');
+assert(last().text.includes('услугу') || last().reply_markup.inline_keyboard.length > 0, 'owner service list');
+console.log('OK owner Записать → services');
+
+r = await handleUpdate(crm, {
+  update_id: 561,
+  callback_query: {
+    id: 'owb1',
+    data: 'bk:sv:svc_cut',
+    from: { username: 'boss' },
+    message: { chat: { id: 999 } },
+  },
+});
+Object.assign(crm, r.patch);
+assert(last().reply_markup?.inline_keyboard, 'owner book → calendar');
+
+r = await handleUpdate(crm, {
+  update_id: 562,
+  callback_query: {
+    id: 'owb2',
+    data: 'bk:dy:2026-09-23',
+    from: { username: 'boss' },
+    message: { chat: { id: 999 } },
+  },
+});
+Object.assign(crm, r.patch);
+const owSlots = last();
+const owSlotBtn = owSlots.reply_markup.inline_keyboard.flat().find((b) => b.callback_data?.startsWith('bk:tm:'));
+assert(owSlotBtn, 'owner book has slot');
+r = await handleUpdate(crm, {
+  update_id: 563,
+  callback_query: {
+    id: 'owb3',
+    data: owSlotBtn.callback_data,
+    from: { username: 'boss' },
+    message: { chat: { id: 999 } },
+  },
+});
+Object.assign(crm, r.patch);
+assert(last().text.includes('Подтвердите'), 'owner book confirm');
+r = await handleUpdate(crm, {
+  update_id: 564,
+  callback_query: {
+    id: 'owb4',
+    data: 'bk:cf',
+    from: { username: 'boss' },
+    message: { chat: { id: 999 } },
+  },
+});
+Object.assign(crm, r.patch);
+assert(last().text.includes('Имя клиента') || last().text.toLowerCase().includes('имя'), 'owner asks client name');
+r = await handleUpdate(crm, {
+  update_id: 565,
+  message: { chat: { id: 999 }, text: 'Пётр Walkin', from: { username: 'boss' } },
+});
+Object.assign(crm, r.patch);
+assert(last().text.toLowerCase().includes('телефон'), 'owner asks client phone');
+r = await handleUpdate(crm, {
+  update_id: 566,
+  message: { chat: { id: 999 }, text: '+79990001122', from: { username: 'boss' } },
+});
+Object.assign(crm, r.patch);
+assert(crm.appointments.length === apCountBefore + 1, 'owner booking created appointment');
+const owAp = crm.appointments[crm.appointments.length - 1];
+assert(owAp.note.includes('мастер') || owAp.source === 'telegram', 'owner booking note/source');
+assert(String(owAp.telegramChatId || '') !== '999', 'owner chat not stored as visit TG');
+const owClient = crm.clients.find((c) => c.id === owAp.clientId);
+assert(owClient, 'owner booking client exists');
+assert(String(owClient.phone || '').includes('9990001122') || String(owClient.phone || '').includes('90001122'), 'walk-in phone saved');
+assert(owClient.name.includes('Пётр') || owClient.name.includes('Walkin'), 'walk-in name saved');
+assert(String(owClient.telegramChatId || '') !== '999', 'owner chat not attached to client');
+const owDone = g.__tgSent.filter((m) => m.chatId === '999');
+assert(owDone.some((m) => String(m.text||'').includes('Клиент записан') || String(m.text||'').includes('записан')), 'owner got success');
+assert(owDone.some((m) => String(m.text||'').includes('напоминан') || String(m.text||'').includes('Напомин')), 'owner reminder prompt');
+console.log('OK owner Записать → service→day→time→name→phone + reminder');
+
+// reuse existing client by phone
+g.__tgSent = [];
+r = await handleUpdate(crm, {
+  update_id: 567,
+  message: { chat: { id: 999 }, text: 'Записать', from: { username: 'boss' } },
+});
+Object.assign(crm, r.patch);
+r = await handleUpdate(crm, {
+  update_id: 568,
+  callback_query: { id: 'owb5', data: 'bk:sv:svc_cut', from: { username: 'boss' }, message: { chat: { id: 999 } } },
+});
+Object.assign(crm, r.patch);
+r = await handleUpdate(crm, {
+  update_id: 569,
+  callback_query: { id: 'owb6', data: 'bk:dy:2026-09-24', from: { username: 'boss' }, message: { chat: { id: 999 } } },
+});
+Object.assign(crm, r.patch);
+const owSlots2 = last();
+const owSlot2 = owSlots2.reply_markup.inline_keyboard.flat().find((b) => b.callback_data?.startsWith('bk:tm:'));
+assert(owSlot2, 'owner reuse slot');
+r = await handleUpdate(crm, {
+  update_id: 570,
+  callback_query: { id: 'owb7', data: owSlot2.callback_data, from: { username: 'boss' }, message: { chat: { id: 999 } } },
+});
+Object.assign(crm, r.patch);
+r = await handleUpdate(crm, {
+  update_id: 571,
+  callback_query: { id: 'owb8', data: 'bk:cf', from: { username: 'boss' }, message: { chat: { id: 999 } } },
+});
+Object.assign(crm, r.patch);
+r = await handleUpdate(crm, {
+  update_id: 572,
+  message: { chat: { id: 999 }, text: 'Иван Тестов', from: { username: 'boss' } },
+});
+Object.assign(crm, r.patch);
+const clientsMid = crm.clients.length;
+r = await handleUpdate(crm, {
+  update_id: 573,
+  message: { chat: { id: 999 }, text: '+79991234567', from: { username: 'boss' } },
+});
+Object.assign(crm, r.patch);
+assert(crm.clients.length === clientsMid, 'reuse existing client by phone (no new row)');
+console.log('OK owner book reuses client by phone');
 
 g.__tgSent = [];
 r = await handleUpdate(crm, {

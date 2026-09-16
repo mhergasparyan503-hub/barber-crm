@@ -43,6 +43,7 @@ const MENU_CANCEL = '❌ Отменить';
 const MENU_REMIND = '🔔 Напоминание';
 
 /** Owner ReplyKeyboard (when chatId === telegramOwnerChatId). */
+const OW_BOOK = '📝 Записать';
 const OW_SCHED = '📆 Изменить график на день';
 const OW_MOVE = '🔁 Перенести клиента';
 const OW_PHONE = '🔍 Поиск по телефону';
@@ -107,9 +108,10 @@ function isOwnerChat(crm: Crm, chatId: string): boolean {
 
 function ownerReplyKeyboard() {
   return replyKb([
+    [rbtn(OW_BOOK), rbtn(OW_TODAY)],
     [rbtn(OW_SCHED), rbtn(OW_MOVE)],
     [rbtn(OW_PHONE), rbtn(OW_SHARE)],
-    [rbtn(OW_CLIENTS), rbtn(OW_TODAY)],
+    [rbtn(OW_CLIENTS)],
   ]);
 }
 
@@ -118,7 +120,7 @@ async function sendOwnerMenu(token: string, chatId: string, crm: Crm, text?: str
     token,
     chatId,
     text ||
-      'Меню мастера.\nКнопки внизу: график, перенос, поиск, ссылка.\n/clients — написать клиенту · /cancel — сброс адресата.',
+      'Меню мастера.\nКнопки внизу: записать клиента, график, перенос, поиск, ссылка.\n/clients — написать клиенту · /cancel — сброс адресата.',
     ownerReplyKeyboard(),
   );
 }
@@ -360,6 +362,12 @@ async function handleOwnerMenuText(
   if (menuEq(text, 'Меню', '📋 Меню') || text === '/menu') {
     await sendOwnerMenu(token, chatId, crm);
     console.log('tg owner Меню → ReplyKeyboard chat', chatId);
+    return true;
+  }
+  if (menuEq(text, OW_BOOK, 'Записать', 'Новая запись')) {
+    setDraft(crm, chatId, { ownerBook: true });
+    await startBookingServices(token, chatId, crm);
+    console.log('tg owner Записать → booking services chat', chatId);
     return true;
   }
   if (menuEq(text, OW_SCHED)) {
@@ -766,7 +774,7 @@ async function handleMessage(token: string, msg: any, crm: Crm) {
         token,
         chatId,
         crm,
-        'Вы в рабочем чате мастера.\nКнопки внизу — меню мастера (график, перенос, поиск, ссылка).',
+        'Вы в рабочем чате мастера.\nКнопки внизу — меню мастера (записать, график, перенос, поиск, ссылка).',
       );
       console.log('tg /start owner-chat → owner ReplyKeyboard chat', chatId);
       return;
@@ -824,6 +832,48 @@ async function handleMessage(token: string, msg: any, crm: Crm) {
     }
 
     const od = getDraft(crm, chatId);
+    // Owner booking-on-behalf: collect client name / phone (same order as clients)
+    if (od.ownerBook && od.await === 'name' && text && !text.startsWith('/')) {
+      setDraft(crm, chatId, { ...od, name: text.slice(0, 80), await: 'phone' });
+      await sendMessage(token, chatId, 'Телефон клиента (+7…):');
+      return;
+    }
+    if (od.ownerBook && od.await === 'phone' && text && !text.startsWith('/')) {
+      if (!phoneOk(text)) {
+        await sendMessage(token, chatId, 'Не похоже на телефон. Пример: +7 999 123-45-67');
+        return;
+      }
+      const phone = normalizePhone(text);
+      setDraft(crm, chatId, { ...od, phone, await: undefined });
+      await finalizeBooking(token, chatId, crm, msg.from);
+      return;
+    }
+    if (od.await === 'remind_custom' && text && !text.startsWith('/')) {
+      const sid = od.remindSid;
+      const ap = findBySuffix(crm.appointments, sid);
+      clearDraftAwait(crm, chatId);
+      if (!ap) {
+        await sendMessage(token, chatId, 'Запись не найдена.', ownerReplyKeyboard());
+        return;
+      }
+      const mins = parseCustomReminder(text, apStart(ap));
+      if (mins == null) {
+        await sendMessage(
+          token,
+          chatId,
+          'Не понял. Примеры: «за 45 минут», «10:00», «15.09 09:30»',
+          kb([[btn('🔔 Напоминание', `bk:rm:${sid}`), btn('📋 Меню', 'bk:menu')]]),
+        );
+        return;
+      }
+      const at = reminderAtBefore(apStart(ap), mins);
+      ap.reminders = [
+        ...(ap.reminders || []).filter((r: any) => r.kind !== `custom_${mins}`),
+        { at, kind: `custom_${mins}`, sent: false },
+      ];
+      await sendMessage(token, chatId, 'Напоминание установлено.', reminderAfterSetKeyboard(sid));
+      return;
+    }
     if (od.await === 'ow_sched_date' && text && !text.startsWith('/')) {
       const day = parseOwnerDate(text);
       if (!day) {
@@ -1020,6 +1070,11 @@ async function handleClientMenuText(
   }
   if (menuEq(text, MENU_BOOK, MENU_BOOK_MORE, 'Записаться ещё')) {
     clearDraftAwait(crm, chatId);
+    if (isOwnerChat(crm, chatId)) {
+      setDraft(crm, chatId, { ownerBook: true });
+    } else {
+      setDraft(crm, chatId, {});
+    }
     await startBookingServices(token, chatId, crm);
     return true;
   }
@@ -1200,6 +1255,13 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
     const draft = getDraft(crm, chatId);
     if (draft.ignoreId) {
       await applyReschedule(token, chatId, crm, cq.from);
+      return;
+    }
+    // Master books on behalf of any client: always collect name + phone
+    const ownerMode = !!draft.ownerBook || isOwnerChat(crm, chatId);
+    if (ownerMode) {
+      setDraft(crm, chatId, { ...draft, ownerBook: true, await: 'name' });
+      await sendMessage(token, chatId, 'Имя клиента?');
       return;
     }
     let client = crm.clients.find((c) => String(c.telegramChatId) === chatId);
@@ -1521,25 +1583,47 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
   }
   const svc = crm.services.find((s) => s.id === draft.serviceId);
   const sid = staffIdOf(crm);
-  let client = crm.clients.find((c) => String(c.telegramChatId) === chatId);
-  if (!client) {
-    const id = 'cli_' + Math.random().toString(36).slice(2, 10);
-    client = {
-      id,
-      name: draft.name || from?.first_name || 'Клиент',
-      phone: draft.phone || '',
-      telegramChatId: chatId,
-      telegramUsername: from?.username,
-      createdAt: new Date().toISOString(),
-    };
-    crm.clients.push(client);
+  const ownerMode = !!draft.ownerBook || isOwnerChat(crm, chatId);
+
+  let client: any;
+  if (ownerMode) {
+    // Master books any client: match by phone or create; never attach owner chat as client TG
+    const phone = draft.phone || '';
+    client = phone ? findClientsByPhone(crm, phone)[0] : undefined;
+    if (client) {
+      if (draft.name && String(draft.name).trim()) client.name = draft.name;
+      if (phone) client.phone = normalizePhone(phone) || client.phone;
+    } else {
+      const id = 'cli_' + Math.random().toString(36).slice(2, 10);
+      client = {
+        id,
+        name: draft.name || 'Клиент',
+        phone: phone ? normalizePhone(phone) || phone : '',
+        createdAt: new Date().toISOString(),
+      };
+      crm.clients.push(client);
+    }
   } else {
-    if (draft.name) client.name = draft.name;
-    if (draft.phone) client.phone = draft.phone;
-    client.telegramChatId = chatId;
-    if (from?.username) client.telegramUsername = from.username;
+    client = crm.clients.find((c) => String(c.telegramChatId) === chatId);
+    if (!client) {
+      const id = 'cli_' + Math.random().toString(36).slice(2, 10);
+      client = {
+        id,
+        name: draft.name || from?.first_name || 'Клиент',
+        phone: draft.phone || '',
+        telegramChatId: chatId,
+        telegramUsername: from?.username,
+        createdAt: new Date().toISOString(),
+      };
+      crm.clients.push(client);
+    } else {
+      if (draft.name) client.name = draft.name;
+      if (draft.phone) client.phone = draft.phone;
+      client.telegramChatId = chatId;
+      if (from?.username) client.telegramUsername = from.username;
+    }
+    linkChat(crm, chatId, from?.username, client.id);
   }
-  linkChat(crm, chatId, from?.username, client.id);
 
   // Apply default reminder prefs from client
   const prefs: number[] = client.reminderPrefs || [];
@@ -1553,6 +1637,7 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
     reminders.push({ at: morningReminderAt(startIso), kind: 'morning', sent: false });
   }
 
+  const clientTg = client.telegramChatId ? String(client.telegramChatId) : undefined;
   const ap: any = {
     id: 'apt_' + Math.random().toString(36).slice(2, 10),
     clientId: client.id,
@@ -1561,16 +1646,19 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
     start: startIso,
     durationMin: svc?.durationMin || 45,
     status: 'waiting',
-    note: 'Telegram',
+    note: ownerMode ? 'Telegram (мастер)' : 'Telegram',
     source: 'telegram',
-    telegramChatId: chatId,
+    // Owner-mode: only client's chat (if any) — never master's chatId
+    telegramChatId: ownerMode ? clientTg : chatId,
     color: crm.settings?.onlineColor || crm.settings?.visitColor,
     reminders,
     createdAt: new Date().toISOString(),
   };
   crm.appointments.push(ap);
   setDraft(crm, chatId, {});
-  await notifyOwner(token, crm, ap, client, svc, 'Новая запись');
+  if (!ownerMode) {
+    await notifyOwner(token, crm, ap, client, svc, 'Новая запись');
+  }
   const tpl =
     crm.settings?.messageTemplates?.booked ||
     '{studio}\n\nВы записаны.\n\n{service}\n{weekday}, {date} в {time}\n{duration}\n\nЕсли планы изменятся — перенесите или отмените кнопками ниже.';
@@ -1585,6 +1673,21 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
     phone: client.phone || '',
     address: crm.settings?.address || '',
   });
+  if (ownerMode) {
+    const summary =
+      `Клиент записан.\n\n${client.name || 'Клиент'}\n${client.phone || '—'}\n` +
+      `${svc?.name || 'услуга'}\n${draft.day} в ${draft.time}\n${svc?.durationMin || 45} мин`;
+    await sendMessage(token, chatId, summary, ownerReplyKeyboard());
+    // Same reminder prompt as clients (delivery goes to client TG when linked; else skipped gracefully)
+    let prompt = 'Запись подтверждена. Поставить напоминание?';
+    if (!clientTg) {
+      prompt += '\n(У клиента нет Telegram в CRM — напоминание сохранится и отправится, когда привяжут чат.)';
+    } else if (prefs.length || client.reminderMorning) {
+      prompt += '\n(Уже применены сохранённые настройки клиента — можно изменить.)';
+    }
+    await sendReminderPicker(token, chatId, ap.id.slice(-10), prompt);
+    return;
+  }
   // One reply: ReplyKeyboard already has Перенести/Отменить/Напоминание when upcoming exists
   await sendMessage(token, chatId, text, clientReplyKeyboard(crm, chatId, client.id));
   // Always offer reminder picker (first-time and returning)
