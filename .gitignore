@@ -1,9 +1,9 @@
-node_modules/
-dist/
+node_modules
+dist
 .DS_Store
 *.local
-data/*.db
-data/*.db-*
+dev-dist
+data/crm-snapshot.json
+data/crm-snapshot.json.tmp
 .env
 .env.*
-data/pglite/

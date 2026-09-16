@@ -11,17 +11,10 @@ export function formatVisitWhen(iso: string) {
   };
 }
 
-export function fillTemplate(
-  tpl: string,
-  vars: Record<string, string>,
-) {
-  return Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v), tpl);
-}
-
 export const STATUS_LABEL: Record<string, string> = {
   waiting: 'Ожидание',
-  confirmed: 'Подтвердил',
-  arrived: 'Пришёл',
   cancelled: 'Отмена',
-  no_show: 'Не пришёл',
 };
+
+export const WEEKDAY_SHORT = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+export const WEEKDAY_FULL = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];

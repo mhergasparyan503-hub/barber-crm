@@ -1,49 +1,94 @@
-import { addDays, format, startOfWeek } from 'date-fns';
+import { useMemo, useRef, useState } from 'react';
+import {
+  addMonths,
+  eachDayOfInterval,
+  endOfMonth,
+  endOfWeek,
+  format,
+  isSameDay,
+  isSameMonth,
+  startOfMonth,
+  startOfWeek,
+} from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { useMemo, useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { useCrm } from '@/lib/store';
-import { Link } from '@tanstack/react-router';
+import { WEEKDAY_SHORT } from '@/lib/format';
+import { cn } from '@/lib/cn';
 
 export function CalendarPage() {
-  const [anchor, setAnchor] = useState(new Date());
+  const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
   const appointments = useCrm((s) => s.appointments);
-  const clients = useCrm((s) => s.clients);
-  const services = useCrm((s) => s.services);
+  const nav = useNavigate();
+  const swipe = useRef<{ x: number } | null>(null);
 
-  const weekStart = startOfWeek(anchor, { weekStartsOn: 1 });
-  const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
+  const busyDays = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of appointments) {
+      if (a.status === 'cancelled') continue;
+      set.add(format(new Date(a.start), 'yyyy-MM-dd'));
+    }
+    return set;
+  }, [appointments]);
+
+  const days = useMemo(() => {
+    const start = startOfWeek(startOfMonth(cursor), { weekStartsOn: 1 });
+    const end = endOfWeek(endOfMonth(cursor), { weekStartsOn: 1 });
+    return eachDayOfInterval({ start, end });
+  }, [+cursor]);
+
+  const labels = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
 
   return (
-    <div className="p-4">
-      <div className="mb-4 flex items-center gap-2">
-        <h1 className="text-xl font-semibold">Неделя</h1>
-        <button type="button" className="touch-btn rounded-md border px-3 text-sm" onClick={() => setAnchor(addDays(anchor, -7))}>←</button>
-        <button type="button" className="touch-btn rounded-md border px-3 text-sm" onClick={() => setAnchor(new Date())}>Сегодня</button>
-        <button type="button" className="touch-btn rounded-md border px-3 text-sm" onClick={() => setAnchor(addDays(anchor, 7))}>→</button>
+    <div
+      className="flex-1 overflow-y-auto bg-white p-4"
+      onTouchStart={(e) => {
+        swipe.current = { x: e.touches[0].clientX };
+      }}
+      onTouchEnd={(e) => {
+        if (!swipe.current) return;
+        const dx = e.changedTouches[0].clientX - swipe.current.x;
+        if (Math.abs(dx) > 50) setCursor((c) => addMonths(c, dx < 0 ? 1 : -1));
+        swipe.current = null;
+      }}
+    >
+      <div className="flex items-center justify-between mb-4">
+        <button type="button" className="px-3 py-2 text-accent font-medium" onClick={() => setCursor((c) => addMonths(c, -1))}>
+          ‹
+        </button>
+        <h2 className="font-semibold capitalize">{format(cursor, 'LLLL yyyy', { locale: ru })}</h2>
+        <button type="button" className="px-3 py-2 text-accent font-medium" onClick={() => setCursor((c) => addMonths(c, 1))}>
+          ›
+        </button>
       </div>
-      <div className="grid gap-2 md:grid-cols-7">
+      <div className="grid grid-cols-7 gap-1 mb-1">
+        {labels.map((l) => (
+          <div key={l} className="text-center text-[10px] text-gray-400 uppercase py-1">
+            {l}
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-1">
         {days.map((d) => {
           const key = format(d, 'yyyy-MM-dd');
-          const list = appointments.filter(
-            (a) => a.status !== 'cancelled' && format(new Date(a.start), 'yyyy-MM-dd') === key,
-          );
+          const inMonth = isSameMonth(d, cursor);
+          const today = isSameDay(d, new Date());
+          const busy = busyDays.has(key);
           return (
-            <div key={key} className="min-h-40 rounded-xl border bg-white p-2">
-              <Link to="/" className="mb-2 block text-sm font-semibold capitalize hover:text-[#ff7900]">
-                {format(d, 'EEE d', { locale: ru })}
-              </Link>
-              <div className="space-y-1">
-                {list.map((a) => {
-                  const c = clients.find((x) => x.id === a.clientId);
-                  const s = services.find((x) => a.serviceIds.includes(x.id));
-                  return (
-                    <div key={a.id} className="rounded bg-slate-100 px-2 py-1 text-xs">
-                      {format(new Date(a.start), 'HH:mm')} {c?.name} · {s?.name}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            <button
+              key={key}
+              type="button"
+              onClick={() => nav({ to: '/', search: { day: key } })}
+              className={cn(
+                'aspect-square rounded-xl flex flex-col items-center justify-center text-sm relative',
+                !inMonth && 'text-gray-300',
+                today && 'ring-2 ring-accent',
+                inMonth && 'hover:bg-gray-50',
+              )}
+            >
+              {format(d, 'd')}
+              {busy && <span className="absolute bottom-1.5 h-1.5 w-1.5 rounded-full bg-accent" />}
+            </button>
           );
         })}
       </div>

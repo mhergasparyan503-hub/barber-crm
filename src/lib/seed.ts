@@ -1,6 +1,7 @@
 import type { CrmState, DaySchedule } from './types';
 
 export const STAFF_ID = 'staff_barber';
+export const DATA_VERSION = 8;
 
 const defaultWeek = (): DaySchedule[] =>
   [0, 1, 2, 3, 4, 5, 6].map((day) => ({
@@ -9,6 +10,15 @@ const defaultWeek = (): DaySchedule[] =>
     end: '21:00',
     working: day >= 1 && day <= 6,
   }));
+
+function telegramDefaults(from?: Partial<CrmState['settings']>) {
+  return {
+    telegramToken: from?.telegramToken || '',
+    telegramBotUsername: from?.telegramBotUsername || '',
+    telegramOwnerChatId: from?.telegramOwnerChatId || '',
+    telegramOffset: typeof from?.telegramOffset === 'number' ? from.telegramOffset : 0,
+  };
+}
 
 export function createSeedState(): CrmState {
   const services = [
@@ -34,7 +44,7 @@ export function createSeedState(): CrmState {
     exceptions: [],
     telegramChats: [],
     settings: {
-      dataVersion: 5,
+      dataVersion: DATA_VERSION,
       studioName: 'Барбершоп',
       subtitle: 'Запись к барберу',
       phone: '',
@@ -46,38 +56,67 @@ export function createSeedState(): CrmState {
       slotMinutes: 15,
       visitColor: '#6b7280',
       onlineColor: '#6b7280',
-      telegramToken: '',
-      telegramBotUsername: '',
-      telegramOwnerChatId: '',
-      telegramOffset: 0,
-      messageTemplates: {
-        booked: '{studio}\n\nВы записаны.\n\n{service}\n{weekday}, {date} в {time}\n{duration}\n\nЕсли планы изменятся — перенесите или отмените кнопками ниже.',
-        reminder: '{name}, напоминание.\n\n{when} запись в {studio}:\n{service}\n{weekday}, {date} в {time}\n\nПодтвердите визит, пожалуйста.',
-      },
-      studioReminders: { dayBefore: true, hoursBefore: 2 },
       onlineServiceIds: services.map((s) => s.id),
+      messageTemplates: {
+        booked:
+          '{studio}\n\nВы записаны.\n\n{service}\n{date} в {time}\n{duration}\n\nЕсли планы изменятся — перенесите или отмените кнопками ниже.',
+        reminder: 'Напоминание\n{studio}\n{name}, жду вас\n{service}\n{date} в {time}',
+      },
+      ...telegramDefaults(),
     },
   };
 }
 
-export function toBarberShop(state: CrmState): CrmState {
-  if ((state.settings?.dataVersion ?? 0) >= 5) return state;
+export function migrateState(state: CrmState): CrmState {
   const seed = createSeedState();
+  const prev = state?.settings || ({} as CrmState['settings']);
+
+  // Soft-fill telegram fields even when already at current version (PIN/data untouched)
+  if ((prev.dataVersion ?? 0) >= DATA_VERSION) {
+    return {
+      ...state,
+      telegramChats: state.telegramChats || [],
+      settings: {
+        ...prev,
+        ...telegramDefaults(prev),
+        messageTemplates: prev.messageTemplates || seed.settings.messageTemplates,
+        dataVersion: DATA_VERSION,
+      },
+    };
+  }
+
   return {
     ...seed,
+    clients: state.clients || [],
+    appointments: (state.appointments || []).map((a) => ({
+      ...a,
+      status: a.status === 'cancelled' ? 'cancelled' : 'waiting',
+      source:
+        a.source === 'online' || a.source === 'telegram' ? a.source : 'journal',
+    })),
+    windows: state.windows || [],
+    schedules: state.schedules?.length ? state.schedules : seed.schedules,
+    exceptions: state.exceptions || [],
+    telegramChats: state.telegramChats || [],
+    services: state.services?.length ? state.services : seed.services,
+    staff: state.staff?.length ? state.staff : seed.staff,
     settings: {
       ...seed.settings,
-      telegramToken: state.settings?.telegramToken || '',
-      telegramBotUsername: state.settings?.telegramBotUsername || '',
-      telegramOwnerChatId: state.settings?.telegramOwnerChatId || '',
-      telegramOffset: state.settings?.telegramOffset || 0,
-      phone: state.settings?.phone || '',
-      address: state.settings?.address || '',
-      studioName: state.settings?.studioName || seed.settings.studioName,
+      phone: prev.phone || '',
+      address: prev.address || '',
+      studioName: prev.studioName || seed.settings.studioName,
+      subtitle: prev.subtitle || seed.settings.subtitle,
+      soloMode: prev.soloMode ?? true,
+      onlineEnabled: prev.onlineEnabled ?? true,
+      leadMinutes: prev.leadMinutes ?? 30,
+      horizonDays: prev.horizonDays ?? 14,
+      slotMinutes: prev.slotMinutes ?? 15,
+      visitColor: prev.visitColor || '#6b7280',
+      onlineColor: prev.onlineColor || '#6b7280',
+      onlineServiceIds: prev.onlineServiceIds || seed.settings.onlineServiceIds,
+      ...telegramDefaults(prev),
+      dataVersion: DATA_VERSION,
     },
-    telegramChats: state.telegramChats || [],
-    clients: [],
-    appointments: [],
   };
 }
 

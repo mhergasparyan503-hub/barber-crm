@@ -1,4 +1,4 @@
-export type VisitStatus = 'waiting' | 'confirmed' | 'arrived' | 'cancelled' | 'no_show';
+export type VisitStatus = 'waiting' | 'cancelled';
 export type ExceptionType = 'off' | 'vacation' | 'sick' | 'custom';
 export type AppointmentSource = 'journal' | 'online' | 'telegram';
 
@@ -28,6 +28,7 @@ export interface Client {
   telegramChatId?: string;
   telegramUsername?: string;
   reminderPrefs?: number[];
+  reminderMorning?: boolean;
   createdAt: string;
 }
 
@@ -36,8 +37,10 @@ export interface Appointment {
   clientId: string;
   staffId: string;
   serviceIds: string[];
+  /** Wall-clock start (MSK naive or +03:00). Not startsAt. */
   start: string;
   durationMin: number;
+  /** booked → waiting; cancelled → cancelled */
   status: VisitStatus;
   note?: string;
   source: AppointmentSource;
@@ -100,13 +103,12 @@ export interface Settings {
   slotMinutes: number;
   visitColor: string;
   onlineColor: string;
+  onlineServiceIds: string[];
   telegramToken: string;
   telegramBotUsername: string;
   telegramOwnerChatId: string;
   telegramOffset: number;
-  messageTemplates: { booked: string; reminder: string };
-  studioReminders: { dayBefore: boolean; hoursBefore: number };
-  onlineServiceIds: string[];
+  messageTemplates?: { booked: string; reminder: string };
 }
 
 export interface CrmState {
@@ -117,6 +119,6 @@ export interface CrmState {
   windows: TimeWindow[];
   schedules: StaffSchedule[];
   exceptions: ScheduleException[];
-  telegramChats: TelegramChat[];
+  telegramChats?: TelegramChat[];
   settings: Settings;
 }

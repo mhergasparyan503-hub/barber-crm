@@ -17,6 +17,18 @@ export async function deleteWebhook(token: string) {
   return tg(token, 'deleteWebhook', { drop_pending_updates: false });
 }
 
+export async function setWebhook(token: string, url: string) {
+  return tg(token, 'setWebhook', {
+    url,
+    drop_pending_updates: false,
+    allowed_updates: ['message', 'callback_query'],
+  });
+}
+
+export async function getWebhookInfo(token: string) {
+  return tg(token, 'getWebhookInfo');
+}
+
 /** Never reset offset to 0 on bot check — caller passes stored offset */
 export async function getUpdates(token: string, offset: number, timeout = 2) {
   return tg(token, 'getUpdates', {
@@ -32,13 +44,27 @@ export async function sendMessage(
   text: string,
   reply_markup?: unknown,
 ) {
-  return tg(token, 'sendMessage', {
+  // Smoke harness: capture outbound messages without hitting Telegram
+  if (process.env.TG_SMOKE_CAPTURE === '1') {
+    const g = globalThis as any;
+    g.__tgSent = g.__tgSent || [];
+    g.__tgSent.push({ chatId: String(chatId), text, reply_markup });
+    return { ok: true, result: { message_id: g.__tgSent.length } };
+  }
+  const res = await tg(token, 'sendMessage', {
     chat_id: chatId,
     text,
     reply_markup,
   });
+  if (res && res.ok === false) {
+    console.error('tg sendMessage fail', res.error_code, res.description);
+  }
+  return res;
 }
 
 export async function answerCallback(token: string, id: string, text?: string) {
+  if (process.env.TG_SMOKE_CAPTURE === '1') {
+    return { ok: true };
+  }
   return tg(token, 'answerCallbackQuery', { callback_query_id: id, text });
 }
