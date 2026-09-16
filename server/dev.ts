@@ -180,10 +180,12 @@ async function main() {
         const snap = (await loadCrmSnapshot()) as any;
         if (!snap?.settings?.telegramToken) return;
         let seenOffset = Number(snap.settings.telegramOffset || 0);
-        // Heal poisoned offsets (e.g. smoke tests writing update_id 1.9e9) so real
-        // Telegram updates (~1.4e8) are not silently dropped forever.
+        // Heal only when telegramOffset itself looks poisoned (smoke wrote ~1.9e9).
+        // Never rewind a healthy offset because of a bogus low update_id (e.g. curl test).
         if (uid != null && uid < seenOffset) {
-          if (seenOffset - Number(uid) > 100_000) {
+          const offsetPoisoned = seenOffset > 1_000_000_000;
+          const uidPlausible = Number(uid) > 1_000_000;
+          if (offsetPoisoned && uidPlausible) {
             console.warn('tg webhook offset heal', seenOffset, '→', Number(uid));
             seenOffset = Number(uid);
             snap.settings.telegramOffset = seenOffset;
