@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X, Phone, MessageSquare } from 'lucide-react';
+import { X, Phone, MessageSquare, Minus, Plus } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { toast } from 'sonner';
 import { useCrm } from '@/lib/store';
@@ -11,6 +11,10 @@ import { cn } from '@/lib/cn';
 import type { Appointment } from '@/lib/types';
 import { notifyOwnerNewVisit } from '@/lib/telegram-notify';
 import { scheduleFlush } from '@/lib/crm-snapshot';
+
+const DURATION_STEP = 15; // match settings.slotMinutes default / window chips
+const DURATION_MIN = 15;
+const DURATION_MAX = 240;
 
 export type BookingMode =
   | { kind: 'new'; start: Date }
@@ -43,6 +47,7 @@ export function BookingSheet({
   const [showComment, setShowComment] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const [winDur, setWinDur] = useState(30);
+  const [durationMin, setDurationMin] = useState(30);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -57,6 +62,7 @@ export function BookingSheet({
       setComment('');
       setShowDt(false);
       setShowComment(false);
+      setDurationMin(30);
     } else if (mode.kind === 'edit' && appt) {
       setPhone(client0?.phone || '');
       setName(client0?.name || '');
@@ -65,6 +71,7 @@ export function BookingSheet({
       setComment(appt.note || '');
       setShowDt(false);
       setShowComment(!!appt.note);
+      setDurationMin(appt.durationMin || 30);
     } else if (mode.kind === 'move' && appt) {
       setPhone(client0?.phone || '');
       setName(client0?.name || '');
@@ -72,6 +79,7 @@ export function BookingSheet({
       setStartLocal(toLocalInput(mode.start));
       setComment(appt.note || '');
       setShowDt(true);
+      setDurationMin(appt.durationMin || 30);
     } else if (mode.kind === 'window') {
       setStartLocal(toLocalInput(mode.start));
       setWinDur(30);
@@ -87,13 +95,16 @@ export function BookingSheet({
     if (found && found.name !== name) setName(found.name);
   }, [phone]);
 
-  const duration = useMemo(() => {
-    if (mode?.kind === 'window') return winDur;
-    return serviceIds.reduce((sum, id) => {
-      const s = state.services.find((x) => x.id === id);
-      return sum + (s?.durationMin || 0);
-    }, 0) || 30;
-  }, [serviceIds, state.services, mode, winDur]);
+  const servicesSum = useMemo(() => {
+    return (
+      serviceIds.reduce((sum, id) => {
+        const s = state.services.find((x) => x.id === id);
+        return sum + (s?.durationMin || 0);
+      }, 0) || 0
+    );
+  }, [serviceIds, state.services]);
+
+  const duration = mode?.kind === 'window' ? winDur : durationMin;
 
   const lastVisitHint = useMemo(() => {
     const last10 = phoneLast10(phone);
@@ -112,7 +123,22 @@ export function BookingSheet({
   if (!open || !mode) return null;
 
   function toggleSvc(id: string) {
-    setServiceIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setServiceIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      const sum = next.reduce((acc, sid) => {
+        const s = state.services.find((x) => x.id === sid);
+        return acc + (s?.durationMin || 0);
+      }, 0);
+      setDurationMin(sum || 30);
+      return next;
+    });
+  }
+
+  function bumpDuration(delta: number) {
+    setDurationMin((prev) => {
+      const next = prev + delta;
+      return Math.min(DURATION_MAX, Math.max(DURATION_MIN, next));
+    });
   }
 
   function save() {
@@ -308,7 +334,40 @@ export function BookingSheet({
                     </button>
                   ))}
                 </div>
-                <p className="text-xs text-gray-400 mt-1">Длительность: {duration} мин</p>
+                <div className="mt-3 rounded-xl border border-gray-200 px-3 py-2.5 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-gray-500">Длительность</div>
+                    <div className="text-sm font-semibold text-gray-900 tabular-nums">
+                      {durationMin} мин
+                      {servicesSum > 0 && servicesSum !== durationMin && (
+                        <span className="ml-1.5 text-xs font-normal text-gray-400">
+                          (услуги {servicesSum})
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      aria-label="Уменьшить длительность"
+                      onClick={() => bumpDuration(-DURATION_STEP)}
+                      disabled={durationMin <= DURATION_MIN}
+                      className="h-10 w-10 rounded-full border border-gray-200 flex items-center justify-center text-gray-700 active:bg-gray-100 disabled:opacity-40"
+                    >
+                      <Minus className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Увеличить длительность"
+                      onClick={() => bumpDuration(DURATION_STEP)}
+                      disabled={durationMin >= DURATION_MAX}
+                      className="h-10 w-10 rounded-full border border-gray-200 flex items-center justify-center text-gray-700 active:bg-gray-100 disabled:opacity-40"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-gray-400 mt-1">Шаг {DURATION_STEP} мин · можно менять вручную</p>
               </div>
 
               <button
