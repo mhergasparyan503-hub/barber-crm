@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { addDays, format, parseISO } from 'date-fns';
+import { eachYmd } from './msk';
 import type {
   Appointment,
   Client,
@@ -87,27 +87,26 @@ export const useCrm = create<Store>()(
         set((s) => ({ windows: [...s.windows, { ...w, id: w.id || uid('win') }] })),
       deleteWindow: (id) => set((s) => ({ windows: s.windows.filter((x) => x.id !== id) })),
       setWeekTemplate: (staffId, week) =>
-        set((s) => ({
-          schedules: s.schedules.map((sc) => (sc.staffId === staffId ? { ...sc, week } : sc)),
-        })),
+        set((s) => {
+          const has = s.schedules.some((sc) => sc.staffId === staffId);
+          if (!has) return { schedules: [...s.schedules, { staffId, week }] };
+          return {
+            schedules: s.schedules.map((sc) => (sc.staffId === staffId ? { ...sc, week } : sc)),
+          };
+        }),
       applyExceptionRange: (staffId, from, to, ex) =>
         set((s) => {
-          const start = parseISO(from);
-          const end = parseISO(to);
+          // Iterate YYYY-MM-DD as Moscow calendar strings — never parseISO/UTC midnight.
           const next = s.exceptions.filter(
             (e) => !(e.staffId === staffId && e.date >= from && e.date <= to),
           );
-          let cur = start;
-          let guard = 0;
-          while (cur <= end && guard < 366) {
+          for (const date of eachYmd(from, to)) {
             next.push({
               id: uid('ex'),
               staffId,
-              date: format(cur, 'yyyy-MM-dd'),
+              date,
               ...ex,
             });
-            cur = addDays(cur, 1);
-            guard++;
           }
           return { exceptions: next };
         }),

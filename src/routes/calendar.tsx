@@ -5,7 +5,6 @@ import {
   endOfMonth,
   endOfWeek,
   format,
-  isSameDay,
   isSameMonth,
   startOfMonth,
   startOfWeek,
@@ -15,6 +14,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useCrm } from '@/lib/store';
 import { WEEKDAY_SHORT } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { mskDateKey, parseApStart } from '@/lib/msk';
 
 export function CalendarPage() {
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
@@ -26,7 +26,7 @@ export function CalendarPage() {
     const set = new Set<string>();
     for (const a of appointments) {
       if (a.status === 'cancelled') continue;
-      set.add(format(new Date(a.start), 'yyyy-MM-dd'));
+      set.add(mskDateKey(parseApStart(a.start)));
     }
     return set;
   }, [appointments]);
@@ -70,9 +70,9 @@ export function CalendarPage() {
       </div>
       <div className="grid grid-cols-7 gap-1">
         {days.map((d) => {
-          const key = format(d, 'yyyy-MM-dd');
+          const key = mskDateKey(d);
           const inMonth = isSameMonth(d, cursor);
-          const today = isSameDay(d, new Date());
+          const today = key === mskDateKey(new Date());
           const busy = busyDays.has(key);
           return (
             <button

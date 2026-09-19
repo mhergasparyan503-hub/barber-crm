@@ -17,8 +17,9 @@ export function TelegramBridge() {
     let dead = false;
 
     const flush = () => {
-      const snap = useCrm.getState().getSnapshot();
-      if (snap.settings.telegramToken) scheduleFlush(() => useCrm.getState().getSnapshot());
+      // Always flush: schedules/exceptions must reach the server for the bot + /book
+      // even when this browser has no telegramToken saved.
+      scheduleFlush(() => useCrm.getState().getSnapshot());
     };
 
     const pull = async () => {

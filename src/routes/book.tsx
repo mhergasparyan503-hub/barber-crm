@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { format, parseISO } from 'date-fns';
+import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useCrm } from '@/lib/store';
 import { STAFF_ID, uid } from '@/lib/seed';
@@ -11,6 +11,7 @@ import { loadSnapshot, scheduleFlush } from '@/lib/crm-snapshot';
 import {
   REMINDER_PRESETS,
   buildReminders,
+  mskDayNoon,
   mskWallISO,
 } from '@/lib/msk';
 
@@ -82,7 +83,7 @@ export function BookPage() {
 
   const slots = useMemo(() => {
     if (!service || !day) return [];
-    return freeSlots({ state: snap, staffId: STAFF_ID, day: parseISO(day), durationMin: service.durationMin });
+    return freeSlots({ state: snap, staffId: STAFF_ID, day, durationMin: service.durationMin });
   }, [serviceId, day, state.appointments, state.windows]);
 
   const botUsername = (settings.telegramBotUsername || '').replace(/^@/, '');
@@ -252,7 +253,7 @@ export function BookPage() {
                     setStep('slot');
                   }}
                 >
-                  {format(parseISO(d), 'EEEE, d MMM', { locale: ru })}
+                  {format(mskDayNoon(d), 'EEEE, d MMM', { locale: ru })}
                 </button>
               ))}
               {!days.length && <p className="text-gray-400 text-sm col-span-2">Нет свободных дней</p>}
@@ -291,7 +292,7 @@ export function BookPage() {
               ← Время
             </button>
             <p className="text-sm text-gray-600 capitalize">
-              {service?.name} · {day && format(parseISO(day), 'd MMMM', { locale: ru })} в {slot}
+              {service?.name} · {day && format(mskDayNoon(day), 'd MMMM', { locale: ru })} в {slot}
             </p>
             <input
               className="w-full rounded-xl border border-gray-200 px-3 py-3"
@@ -412,7 +413,7 @@ export function BookPage() {
             <p className="text-gray-600 capitalize mb-6">
               {service?.name}
               <br />
-              {day && format(parseISO(day), 'EEEE, d MMMM', { locale: ru })} в {slot}
+              {day && format(mskDayNoon(day), 'EEEE, d MMMM', { locale: ru })} в {slot}
             </p>
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-left space-y-3">
               <p className="text-sm text-gray-700">

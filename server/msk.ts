@@ -42,3 +42,26 @@ export function morningReminderAt(start: string): string {
   const { date } = mskParts(parseApStart(start));
   return new Date(`${date}T09:00:00${MSK_OFFSET}`).toISOString();
 }
+
+/** Day-of-week 0=Sun..6=Sat for a Moscow calendar YYYY-MM-DD (TZ-safe). */
+export function mskDow(ymd: string): number {
+  return new Date(`${ymd}T12:00:00${MSK_OFFSET}`).getUTCDay();
+}
+
+/** Moscow calendar YYYY-MM-DD for a Date (or "now"). */
+export function mskDateKey(d: Date = new Date()): string {
+  return mskParts(d).date;
+}
+
+/** Parse YYYY-MM-DD as Moscow calendar day → Date at noon MSK. */
+export function mskDayNoon(ymd: string): Date {
+  return new Date(`${ymd}T12:00:00${MSK_OFFSET}`);
+}
+
+/** Add N calendar days to a YYYY-MM-DD (no TZ drift). */
+export function addYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+}

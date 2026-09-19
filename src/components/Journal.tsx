@@ -3,7 +3,6 @@ import {
   addDays,
   addMinutes,
   format,
-  isSameDay,
   startOfDay,
   startOfWeek,
   differenceInMinutes,
@@ -16,6 +15,7 @@ import { WEEKDAY_SHORT } from '@/lib/format';
 import { telHref, smsHref } from '@/lib/phone';
 import { cn } from '@/lib/cn';
 import type { BookingMode } from './BookingSheet';
+import { mskDateKey, mskDow, parseApStart } from '@/lib/msk';
 
 const PX_PER_HOUR = 64;
 const SLOT_MIN = 15;
@@ -54,14 +54,15 @@ export function Journal({
   const weekStart = startOfWeek(day, { weekStartsOn: 1 });
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [+weekStart]);
 
+  const dayKey = mskDateKey(day);
   const dayAppts = state.appointments.filter(
     (a) =>
       a.staffId === STAFF_ID &&
       a.status !== 'cancelled' &&
-      isSameDay(new Date(a.start), day),
+      mskDateKey(parseApStart(a.start)) === dayKey,
   );
   const dayWins = state.windows.filter(
-    (w) => w.staffId === STAFF_ID && isSameDay(new Date(w.start), day),
+    (w) => w.staffId === STAFF_ID && mskDateKey(parseApStart(w.start)) === dayKey,
   );
 
   const gridStart = plan.working && plan.start ? plan.start : null;
@@ -164,8 +165,8 @@ export function Journal({
       >
         <div className="flex gap-1">
           {weekDays.map((d) => {
-            const active = isSameDay(d, day);
-            const today = isSameDay(d, now);
+            const active = mskDateKey(d) === dayKey;
+            const today = mskDateKey(d) === mskDateKey(now);
             return (
               <button
                 key={+d}
@@ -176,9 +177,9 @@ export function Journal({
                   active ? 'bg-accent text-white' : 'text-gray-700',
                 )}
               >
-                <div className="text-[10px] uppercase opacity-80">{WEEKDAY_SHORT[d.getDay()]}</div>
+                <div className="text-[10px] uppercase opacity-80">{WEEKDAY_SHORT[mskDow(mskDateKey(d))]}</div>
                 <div className={cn('text-base font-semibold', today && !active && 'text-accent')}>
-                  {format(d, 'd')}
+                  {Number(mskDateKey(d).slice(8))}
                 </div>
               </button>
             );
@@ -247,7 +248,7 @@ export function Journal({
 
             {/* empty windows */}
             {dayWins.map((w) => {
-              const s = new Date(w.start);
+              const s = parseApStart(w.start);
               return (
                 <button
                   key={w.id}
@@ -269,7 +270,7 @@ export function Journal({
 
             {/* visits */}
             {dayAppts.map((a) => {
-              const s = new Date(a.start);
+              const s = parseApStart(a.start);
               const client = state.clients.find((c) => c.id === a.clientId);
               const color = a.color || state.settings.visitColor || '#6b7280';
               return (
@@ -304,7 +305,7 @@ export function Journal({
             })}
 
             {/* now line */}
-            {isSameDay(day, now) && now >= gridStart && now <= gridEnd && (
+            {dayKey === mskDateKey(now) && now >= gridStart && now <= gridEnd && (
               <div
                 className="absolute left-8 right-0 z-20 pointer-events-none"
                 style={{ top: (minFromTop(now) / 60) * PX_PER_HOUR }}

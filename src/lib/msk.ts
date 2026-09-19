@@ -84,3 +84,40 @@ export function buildReminders(
   }
   return out;
 }
+
+/** Day-of-week 0=Sun..6=Sat for a Moscow calendar YYYY-MM-DD (TZ-safe). */
+export function mskDow(ymd: string): number {
+  return new Date(`${ymd}T12:00:00${MSK_OFFSET}`).getUTCDay();
+}
+
+/** Moscow calendar YYYY-MM-DD for a Date (or "now"). */
+export function mskDateKey(d: Date = new Date()): string {
+  return mskParts(d).date;
+}
+
+/** Parse YYYY-MM-DD as Moscow calendar day → Date at noon MSK (stable for UI). */
+export function mskDayNoon(ymd: string): Date {
+  return new Date(`${ymd}T12:00:00${MSK_OFFSET}`);
+}
+
+/** Add N calendar days to a YYYY-MM-DD (Moscow date arithmetic, no TZ drift). */
+export function addYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+}
+
+/** Inclusive list of YYYY-MM-DD from..to (Moscow calendar strings). */
+export function eachYmd(from: string, to: string): string[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return [];
+  const out: string[] = [];
+  let cur = from;
+  let guard = 0;
+  while (cur <= to && guard < 366) {
+    out.push(cur);
+    cur = addYmd(cur, 1);
+    guard++;
+  }
+  return out;
+}

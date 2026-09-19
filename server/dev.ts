@@ -64,6 +64,13 @@ async function main() {
           incoming.settings.telegramOwnerChatId = prev.settings.telegramOwnerChatId;
         }
       }
+      // Never let a partial/empty browser flush wipe the work schedule the bot reads.
+      if ((!incoming.schedules || !incoming.schedules.length) && prev?.schedules?.length) {
+        incoming.schedules = prev.schedules;
+      }
+      if ((!incoming.staff || !incoming.staff.length) && prev?.staff?.length) {
+        incoming.staff = prev.staff;
+      }
     } catch {
       /* */
     }

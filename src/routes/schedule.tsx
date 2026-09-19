@@ -6,6 +6,7 @@ import { STAFF_ID } from '@/lib/seed';
 import { WEEKDAY_FULL } from '@/lib/format';
 import type { DaySchedule, ExceptionType } from '@/lib/types';
 import { toast } from 'sonner';
+import { scheduleFlush } from '@/lib/crm-snapshot';
 import { cn } from '@/lib/cn';
 
 export function SchedulePage() {
@@ -22,9 +23,26 @@ export function SchedulePage() {
   const [customStart, setCustomStart] = useState('10:00');
   const [customEnd, setCustomEnd] = useState('21:00');
 
+  function flushSchedule() {
+    scheduleFlush(() => useCrm.getState().getSnapshot());
+  }
+
   function updateDay(day: number, patch: Partial<DaySchedule>) {
-    const next = week.map((d) => (d.day === day ? { ...d, ...patch } : d));
+    // Upsert missing weekday rows (map alone would silently no-op).
+    const base = week.length
+      ? week
+      : [0, 1, 2, 3, 4, 5, 6].map((d) => ({
+          day: d,
+          start: '10:00',
+          end: '21:00',
+          working: d >= 1 && d <= 6,
+        }));
+    const has = base.some((d) => d.day === day);
+    const next = has
+      ? base.map((d) => (d.day === day ? { ...d, ...patch } : d))
+      : [...base, { day, start: '10:00', end: '21:00', working: false, ...patch }];
     setWeekTemplate(STAFF_ID, next);
+    flushSchedule();
   }
 
   // Mon-Sun order for display (1..6,0)
@@ -37,6 +55,7 @@ export function SchedulePage() {
     }
     if (exType === 'template') {
       clearExceptionsRange(STAFF_ID, from, to);
+      flushSchedule();
       toast.success('По шаблону');
       return;
     }
@@ -44,6 +63,7 @@ export function SchedulePage() {
       type: exType,
       ...(exType === 'custom' ? { start: customStart, end: customEnd } : {}),
     });
+    flushSchedule();
     toast.success('Исключения сохранены');
   }
 

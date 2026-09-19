@@ -1,5 +1,5 @@
 import { sendMessage, editMessageText, answerCallback, getUpdates } from './telegram-api';
-import { parseApStart, mskWallISO, mskParts, reminderAtBefore, morningReminderAt } from './msk';
+import { parseApStart, mskWallISO, mskParts, reminderAtBefore, morningReminderAt, mskDow, mskDateKey } from './msk';
 import { claimUpdateId } from './tg-dedup';
 
 type Crm = {
@@ -1177,7 +1177,7 @@ async function handleClientMenuText(
       ignoreId: nearest.id.slice(-10),
     });
     const ym = mskParts(new Date()).date.slice(0, 7);
-    await sendMonthCalendar(token, chatId, ym);
+    await sendMonthCalendar(token, chatId, ym, crm);
     return true;
   }
   if (menuEq(text, MENU_CANCEL)) {
@@ -1287,11 +1287,14 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
     setDraft(crm, chatId, { ...(getDraft(crm, chatId) || {}), serviceId, ignoreId: undefined });
     const now = new Date();
     const ym = `${mskParts(now).date.slice(0, 7)}`;
-    await sendMonthCalendar(token, chatId, ym);
+    const svc0 = crm.services.find((s) => s.id === serviceId);
+    await sendMonthCalendar(token, chatId, ym, crm, svc0?.durationMin || 45);
     return;
   }
   if (data.startsWith('bk:mo:')) {
-    await sendMonthCalendar(token, chatId, data.slice(6));
+    const draft = getDraft(crm, chatId);
+    const svcMo = crm.services.find((s) => s.id === draft.serviceId);
+    await sendMonthCalendar(token, chatId, data.slice(6), crm, svcMo?.durationMin || 45);
     return;
   }
   if (data.startsWith('bk:dy:')) {
@@ -1306,7 +1309,24 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
     for (let i = 0; i < slots.length; i += 3) {
       rows.push(slots.slice(i, i + 3).map((t) => btn(t, `bk:tm:${t.replace(':', '')}`)));
     }
-    if (!rows.length) rows.push([btn('Нет мест', 'bk:go')]);
+    if (!rows.length) {
+      const today = mskDateKey(new Date());
+      const horizon = Number(crm.settings?.horizonDays ?? 14);
+      const maxDay = mskDateKey(new Date(Date.now() + horizon * 24 * 3600 * 1000));
+      let why = 'нет свободных слотов';
+      if (day < today) why = 'день уже прошёл';
+      else if (day > maxDay) why = `вне горизонта записи (${horizon} дн.)`;
+      else {
+        const dow = mskDow(day);
+        const week = crm.schedules?.find((s) => s.staffId === sid)?.week?.find((w: any) => w.day === dow);
+        const ex = crm.exceptions?.find((e) => e.staffId === sid && e.date === day);
+        if (ex && (ex.type === 'off' || ex.type === 'vacation' || ex.type === 'sick')) why = 'выходной в графике';
+        else if (!(ex?.type === 'custom' && ex.start && ex.end) && (!week || !week.working)) why = 'нет в графике';
+      }
+      rows.push([btn('Нет мест', 'bk:go')]);
+      await sendMessage(token, chatId, `Время на ${day}: ${why}.`, kb(rows.concat([[btn('« Назад', 'bk:go')]])));
+      return;
+    }
     rows.push([btn('« Назад', 'bk:go')]);
     await sendMessage(token, chatId, `Время на ${day}:`, kb(rows));
     return;
@@ -1418,7 +1438,7 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
     });
     const now = new Date();
     const ym = mskParts(now).date.slice(0, 7);
-    await sendMonthCalendar(token, chatId, ym);
+    await sendMonthCalendar(token, chatId, ym, crm);
     return;
   }
   if (data === 'bk:rm' || data === 'bk:rm:') {
@@ -1608,7 +1628,7 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
     });
     const now = new Date();
     const ym = mskParts(now).date.slice(0, 7);
-    await sendMonthCalendar(token, chatId, ym);
+    await sendMonthCalendar(token, chatId, ym, crm);
     return;
   }
   if (data.startsWith('ow:msg:')) {
@@ -1800,22 +1820,32 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
   await sendReminderPicker(token, chatId, ap.id.slice(-10), prompt);
 }
 
-async function sendMonthCalendar(token: string, chatId: string, ym: string) {
+async function sendMonthCalendar(token: string, chatId: string, ym: string, crm?: Crm, durationMin = 45) {
   const [y, m] = ym.split('-').map(Number);
-  const first = new Date(Date.UTC(y, m - 1, 1));
   // Mon-first pad using MSK noon of the 1st
-  const dow = new Date(`${ym}-01T12:00:00+03:00`).getDay();
+  const dow = mskDow(`${ym}-01`);
   const startPad = (dow + 6) % 7;
-  const daysInMonth = new Date(y, m, 0).getDate();
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
   const rows: any[] = [
     [btn('←', `bk:mo:${prevMonth(ym)}`), btn(ym, `bk:mo:${ym}`), btn('→', `bk:mo:${nextMonth(ym)}`)],
   ];
   rows.push(['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'].map((t) => btn(t, 'bk:noop')));
   let row: any[] = [];
   for (let i = 0; i < startPad; i++) row.push(btn('·', 'bk:noop'));
+  const sid = crm ? staffIdOf(crm) : '';
   for (let d = 1; d <= daysInMonth; d++) {
     const ds = `${ym}-${String(d).padStart(2, '0')}`;
-    row.push(btn(String(d), `bk:dy:${ds}`));
+    if (crm && sid) {
+      const slots = computeSlots(crm, sid, ds, durationMin);
+      if (!slots.length) {
+        // Past / closed / beyond horizon — not bookable
+        row.push(btn('·', 'bk:noop'));
+      } else {
+        row.push(btn(String(d), `bk:dy:${ds}`));
+      }
+    } else {
+      row.push(btn(String(d), `bk:dy:${ds}`));
+    }
     if (row.length === 7) {
       rows.push(row);
       row = [];
@@ -1824,8 +1854,13 @@ async function sendMonthCalendar(token: string, chatId: string, ym: string) {
   while (row.length && row.length < 7) row.push(btn('·', 'bk:noop'));
   if (row.length) rows.push(row);
   rows.push([btn('« 📋 Меню', 'bk:menu')]);
-  void first;
-  await sendMessage(token, chatId, 'Выберите день:', kb(rows));
+  const horizon = Number(crm?.settings?.horizonDays ?? 14);
+  await sendMessage(
+    token,
+    chatId,
+    `Выберите день (доступны ближайшие ${horizon} дн. по графику):`,
+    kb(rows),
+  );
 }
 
 function prevMonth(ym: string) {
@@ -1845,30 +1880,42 @@ function hmToMin(hm: string): number {
 }
 
 function computeSlots(crm: Crm, staffId: string, day: string, durationMin: number, ignoreSuffix?: string) {
-  const date = new Date(day + 'T12:00:00+03:00');
-  const dow = date.getDay();
+  // Align with web getDayPlan: MSK calendar dow + custom override or week template.
+  const dow = mskDow(day);
+  const now = new Date();
+  const today = mskDateKey(now);
+  if (day < today) return []; // past Moscow days
+  const horizon = Number(crm.settings?.horizonDays ?? 14);
+  if (Number.isFinite(horizon) && horizon >= 0) {
+    const maxDay = mskDateKey(new Date(now.getTime() + horizon * 24 * 3600 * 1000));
+    if (day > maxDay) return [];
+  }
   const ex = crm.exceptions?.find((e) => e.staffId === staffId && e.date === day);
   if (ex && (ex.type === 'off' || ex.type === 'vacation' || ex.type === 'sick')) return [];
   const week = crm.schedules?.find((s) => s.staffId === staffId)?.week?.find((w: any) => w.day === dow);
-  let start = ex?.type === 'custom' && ex.start ? ex.start : week?.start || '10:00';
-  let end = ex?.type === 'custom' && ex.end ? ex.end : week?.end || '21:00';
-  if (week && !week.working && ex?.type !== 'custom') return [];
-  const breakStart =
-    ex?.type === 'custom' && ex.breakStart ? ex.breakStart : week?.breakStart;
-  const breakEnd = ex?.type === 'custom' && ex.breakEnd ? ex.breakEnd : week?.breakEnd;
+  let start: string;
+  let end: string;
+  let breakStart: string | undefined;
+  let breakEnd: string | undefined;
+  if (ex?.type === 'custom' && ex.start && ex.end) {
+    start = ex.start;
+    end = ex.end;
+    breakStart = ex.breakStart;
+    breakEnd = ex.breakEnd;
+  } else {
+    // Missing week row OR working:false → closed (same as web getDayPlan).
+    // Do NOT fall back to 10:00–21:00 — that disagreed with the CRM schedule UI.
+    if (!week || !week.working) return [];
+    start = week.start || '10:00';
+    end = week.end || '21:00';
+    breakStart = week.breakStart;
+    breakEnd = week.breakEnd;
+  }
   const step = crm.settings?.slotMinutes || 15;
   const lead = crm.settings?.leadMinutes || 30;
-  const horizon = Number(crm.settings?.horizonDays ?? 14);
   const slots: string[] = [];
   let cur = hmToMin(start);
   const endM = hmToMin(end);
-  const now = new Date();
-  const today = mskParts(now).date;
-  if (Number.isFinite(horizon) && horizon >= 0) {
-    const maxDate = new Date(now.getTime() + horizon * 24 * 3600 * 1000);
-    const maxDay = mskParts(maxDate).date;
-    if (day > maxDay) return [];
-  }
   const brS = breakStart ? hmToMin(breakStart) : null;
   const brE = breakEnd ? hmToMin(breakEnd) : null;
 
