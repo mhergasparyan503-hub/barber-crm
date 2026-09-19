@@ -39,6 +39,7 @@ export function createSeedState(): CrmState {
     services,
     staff: [{ id: STAFF_ID, name: 'Барбер', color: '#6b7280', active: true }],
     appointments: [],
+    deletedAppointmentIds: [],
     windows: [],
     schedules: [{ staffId: STAFF_ID, week: defaultWeek() }],
     exceptions: [],
@@ -76,6 +77,7 @@ export function migrateState(state: CrmState): CrmState {
     return {
       ...state,
       telegramChats: state.telegramChats || [],
+      deletedAppointmentIds: state.deletedAppointmentIds || [],
       settings: {
         ...prev,
         ...telegramDefaults(prev),
@@ -94,6 +96,7 @@ export function migrateState(state: CrmState): CrmState {
       source:
         a.source === 'online' || a.source === 'telegram' ? a.source : 'journal',
     })),
+    deletedAppointmentIds: state.deletedAppointmentIds || [],
     windows: state.windows || [],
     schedules: state.schedules?.length ? state.schedules : seed.schedules,
     exceptions: state.exceptions || [],

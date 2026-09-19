@@ -24,9 +24,20 @@ export async function saveSnapshot(data: CrmState): Promise<void> {
 }
 
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function scheduleFlush(getData: () => CrmState) {
   if (flushTimer) clearTimeout(flushTimer);
   flushTimer = setTimeout(() => {
+    flushTimer = null;
     void saveSnapshot(getData());
   }, 250);
+}
+
+/** Immediate flush (delete/cancel) — beats the 5s pull race that can resurrect removals. */
+export function flushNow(getData: () => CrmState): Promise<void> {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  return saveSnapshot(getData());
 }

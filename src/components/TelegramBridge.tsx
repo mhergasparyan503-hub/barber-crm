@@ -56,25 +56,49 @@ export function TelegramBridge() {
         const remoteAppts = remote.appointments || [];
         const localClientIds = new Set(local.clients.map((c) => c.id));
         const localApptIds = new Set(local.appointments.map((a) => a.id));
+        const tombstones = new Set(local.deletedAppointmentIds || []);
+        const remoteApptIds = new Set(remoteAppts.map((a) => a.id));
+        // Drop tombstones once the server no longer has the id (flush succeeded).
+        const prunedTombstones = [...tombstones].filter((id) => remoteApptIds.has(id));
+        const tombstonesChanged =
+          prunedTombstones.length !== tombstones.size ||
+          prunedTombstones.some((id) => !tombstones.has(id));
+
         const newClients = remoteClients.filter((c) => !localClientIds.has(c.id));
         const linkedUpdates = remoteClients.filter((rc) => {
           const lc = local.clients.find((c) => c.id === rc.id);
           return lc && rc.telegramChatId && rc.telegramChatId !== lc.telegramChatId;
         });
-        const newAppts = remoteAppts.filter((a) => !localApptIds.has(a.id));
+        // Never resurrect hard-deleted appointments from a stale server snapshot.
+        const newAppts = remoteAppts.filter(
+          (a) => !localApptIds.has(a.id) && !tombstones.has(a.id),
+        );
         const remoteApptMap = new Map(remoteAppts.map((a) => [a.id, a]));
         const statusMoved = local.appointments.filter((a) => {
           const r = remoteApptMap.get(a.id);
+          if (!r) return false;
+          // Prefer cancelled: local cancel must not be overwritten by stale remote waiting.
+          const nextStatus =
+            a.status === 'cancelled' || r.status === 'cancelled'
+              ? ('cancelled' as const)
+              : r.status;
           return (
-            r &&
-            (r.status !== a.status ||
-              r.start !== a.start ||
-              JSON.stringify(r.reminders || []) !== JSON.stringify(a.reminders || []))
+            nextStatus !== a.status ||
+            r.start !== a.start ||
+            JSON.stringify(r.reminders || []) !== JSON.stringify(a.reminders || [])
           );
         });
 
-        if (newClients.length || linkedUpdates.length || newAppts.length || statusMoved.length || remote.telegramChats) {
+        if (
+          newClients.length ||
+          linkedUpdates.length ||
+          newAppts.length ||
+          statusMoved.length ||
+          remote.telegramChats ||
+          tombstonesChanged
+        ) {
           useCrm.getState().mergeTelegramPatch({
+            deletedAppointmentIds: prunedTombstones,
             clients: [
               ...local.clients.map((c) => {
                 const u =
@@ -95,9 +119,13 @@ export function TelegramBridge() {
               ...local.appointments.map((a) => {
                 const r = remoteApptMap.get(a.id);
                 if (!r) return a;
+                const status =
+                  a.status === 'cancelled' || r.status === 'cancelled'
+                    ? ('cancelled' as const)
+                    : r.status;
                 return {
                   ...a,
-                  status: r.status,
+                  status,
                   start: r.start,
                   reminders: r.reminders ?? a.reminders,
                   telegramChatId: r.telegramChatId || a.telegramChatId,

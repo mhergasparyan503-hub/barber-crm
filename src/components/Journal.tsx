@@ -9,6 +9,7 @@ import {
 } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useCrm } from '@/lib/store';
+import { flushNow } from '@/lib/crm-snapshot';
 import { STAFF_ID } from '@/lib/seed';
 import { getDayPlan } from '@/lib/schedule';
 import { WEEKDAY_SHORT } from '@/lib/format';
@@ -379,6 +380,7 @@ export function Journal({
               className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-gray-50"
               onClick={() => {
                 state.upsertAppointment({ ...menuAppt, status: 'cancelled' });
+                void flushNow(() => state.getSnapshot());
                 setMenu(null);
               }}
             >

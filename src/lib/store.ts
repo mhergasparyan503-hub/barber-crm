@@ -71,14 +71,25 @@ export const useCrm = create<Store>()(
       upsertAppointment: (a) =>
         set((s) => {
           const exists = s.appointments.some((x) => x.id === a.id);
+          const deletedAppointmentIds = (s.deletedAppointmentIds || []).filter((id) => id !== a.id);
           return {
+            deletedAppointmentIds,
             appointments: exists
               ? s.appointments.map((x) => (x.id === a.id ? a : x))
               : [...s.appointments, a],
           };
         }),
       deleteAppointment: (id) =>
-        set((s) => ({ appointments: s.appointments.filter((x) => x.id !== id) })),
+        set((s) => {
+          const prev = s.deletedAppointmentIds || [];
+          const deletedAppointmentIds = prev.includes(id)
+            ? prev
+            : [...prev, id].slice(-300);
+          return {
+            appointments: s.appointments.filter((x) => x.id !== id),
+            deletedAppointmentIds,
+          };
+        }),
       moveAppointment: (id, start) =>
         set((s) => ({
           appointments: s.appointments.map((x) => (x.id === id ? { ...x, start } : x)),
@@ -124,6 +135,7 @@ export const useCrm = create<Store>()(
           services: s.services,
           staff: s.staff,
           appointments: s.appointments,
+          deletedAppointmentIds: s.deletedAppointmentIds || [],
           windows: s.windows,
           schedules: s.schedules,
           exceptions: s.exceptions,
@@ -135,6 +147,7 @@ export const useCrm = create<Store>()(
         set((s) => ({
           clients: patch.clients ?? s.clients,
           appointments: patch.appointments ?? s.appointments,
+          deletedAppointmentIds: patch.deletedAppointmentIds ?? s.deletedAppointmentIds,
           telegramChats: patch.telegramChats ?? s.telegramChats,
           settings: patch.settings ? { ...s.settings, ...patch.settings } : s.settings,
         })),
@@ -148,6 +161,7 @@ export const useCrm = create<Store>()(
         services: s.services,
         staff: s.staff,
         appointments: s.appointments,
+        deletedAppointmentIds: s.deletedAppointmentIds || [],
         windows: s.windows,
         schedules: s.schedules,
         exceptions: s.exceptions,

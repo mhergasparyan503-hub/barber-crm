@@ -10,7 +10,7 @@ import { formatVisitWhen } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import type { Appointment } from '@/lib/types';
 import { notifyOwnerNewVisit } from '@/lib/telegram-notify';
-import { scheduleFlush } from '@/lib/crm-snapshot';
+import { scheduleFlush, flushNow } from '@/lib/crm-snapshot';
 
 const DURATION_STEP = 15; // match settings.slotMinutes default / window chips
 const DURATION_MIN = 15;
@@ -269,6 +269,7 @@ export function BookingSheet({
       return;
     }
     state.deleteAppointment(appt.id);
+    void flushNow(() => state.getSnapshot());
     toast.success('Запись удалена');
     onClose();
   }
@@ -276,6 +277,7 @@ export function BookingSheet({
   function cancelVisit() {
     if (!appt) return;
     state.upsertAppointment({ ...appt, status: 'cancelled' });
+    void flushNow(() => state.getSnapshot());
     toast.success('Отменено');
     onClose();
   }

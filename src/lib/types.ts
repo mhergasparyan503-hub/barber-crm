@@ -116,6 +116,8 @@ export interface CrmState {
   services: Service[];
   staff: Staff[];
   appointments: Appointment[];
+  /** Hard-deleted ids — blocks TelegramBridge pull from resurrecting until server flush drops them. */
+  deletedAppointmentIds?: string[];
   windows: TimeWindow[];
   schedules: StaffSchedule[];
   exceptions: ScheduleException[];
