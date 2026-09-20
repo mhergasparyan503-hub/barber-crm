@@ -50,6 +50,8 @@ export function BookingSheet({
   const [winDur, setWinDur] = useState(30);
   const [durationMin, setDurationMin] = useState(30);
   const [error, setError] = useState('');
+  /** Collapsed by default when editing/moving with services already chosen; expanded for new. */
+  const [servicesOpen, setServicesOpen] = useState(true);
 
   useEffect(() => {
     if (!mode) return;
@@ -63,6 +65,7 @@ export function BookingSheet({
       setComment('');
       setShowComment(false);
       setDurationMin(30);
+      setServicesOpen(true);
     } else if (mode.kind === 'edit' && appt) {
       setPhone(client0?.phone || '');
       setName(client0?.name || '');
@@ -71,6 +74,7 @@ export function BookingSheet({
       setComment(appt.note || '');
       setShowComment(!!appt.note);
       setDurationMin(appt.durationMin || 30);
+      setServicesOpen(!(appt.serviceIds.length > 0));
     } else if (mode.kind === 'move' && appt) {
       setPhone(client0?.phone || '');
       setName(client0?.name || '');
@@ -78,6 +82,7 @@ export function BookingSheet({
       setStartLocal(toLocalInput(mode.start));
       setComment(appt.note || '');
       setDurationMin(appt.durationMin || 30);
+      setServicesOpen(!(appt.serviceIds.length > 0));
     } else if (mode.kind === 'window') {
       setStartLocal(toLocalInput(mode.start));
       setWinDur(30);
@@ -100,6 +105,20 @@ export function BookingSheet({
         return sum + (s?.durationMin || 0);
       }, 0) || 0
     );
+  }, [serviceIds, state.services]);
+
+  const servicesSummary = useMemo(() => {
+    const selected = serviceIds
+      .map((id) => state.services.find((s) => s.id === id))
+      .filter((s): s is NonNullable<typeof s> => !!s);
+    if (!selected.length) return null;
+    const first = selected[0];
+    const extra = selected.length - 1;
+    return {
+      label: `${first.name} · ${first.durationMin}м`,
+      extra,
+      count: selected.length,
+    };
   }, [serviceIds, state.services]);
 
   const duration = mode?.kind === 'window' ? winDur : durationMin;
@@ -370,24 +389,61 @@ export function BookingSheet({
               {lastVisitHint && <p className="text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2">{lastVisitHint}</p>}
 
               <div>
-                <div className="text-xs text-gray-500 mb-1.5">Услуги</div>
-                <div className="flex flex-wrap gap-2">
-                  {activeServices.map((s) => (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => toggleSvc(s.id)}
-                      className={cn(
-                        'px-3 py-1.5 rounded-full text-sm border',
-                        serviceIds.includes(s.id)
-                          ? 'bg-accent text-white border-accent'
-                          : 'border-gray-200 bg-white',
-                      )}
-                    >
-                      {s.name} · {s.durationMin}м
-                    </button>
-                  ))}
-                </div>
+                <button
+                  type="button"
+                  className="w-full flex items-center gap-2 min-h-11 py-1 text-left"
+                  onClick={() => setServicesOpen((v) => !v)}
+                  aria-expanded={servicesOpen}
+                >
+                  <span className="text-xs text-gray-500 flex-1">
+                    Услуги{' '}
+                    <span className="text-gray-400" aria-hidden>
+                      {servicesOpen ? '▾' : '▸'}
+                    </span>
+                    {!servicesOpen && serviceIds.length > 0 && (
+                      <span className="ml-1 text-gray-400">({serviceIds.length})</span>
+                    )}
+                  </span>
+                  <span className="text-xs font-medium text-accent">
+                    {servicesOpen ? 'Свернуть' : serviceIds.length ? 'Изменить' : 'Выбрать'}
+                  </span>
+                </button>
+                {!servicesOpen ? (
+                  <button
+                    type="button"
+                    className="w-full text-left rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-800 active:bg-gray-100"
+                    onClick={() => setServicesOpen(true)}
+                  >
+                    {!servicesSummary ? (
+                      <span className="text-gray-400">Не выбрано — нажмите, чтобы выбрать</span>
+                    ) : (
+                      <span>
+                        {servicesSummary.label}
+                        {servicesSummary.extra > 0 ? (
+                          <span className="text-gray-500"> · ещё {servicesSummary.extra}</span>
+                        ) : null}
+                      </span>
+                    )}
+                  </button>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {activeServices.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => toggleSvc(s.id)}
+                        className={cn(
+                          'px-3 py-1.5 rounded-full text-sm border min-h-9',
+                          serviceIds.includes(s.id)
+                            ? 'bg-accent text-white border-accent'
+                            : 'border-gray-200 bg-white',
+                        )}
+                      >
+                        {s.name} · {s.durationMin}м
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="mt-3 rounded-xl border border-gray-200 px-3 py-2.5 flex items-center gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="text-xs text-gray-500">Длительность</div>
