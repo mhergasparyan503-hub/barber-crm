@@ -1,26 +1,51 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { X, Phone, MessageSquare } from 'lucide-react';
-import { format, parseISO } from 'date-fns';
+import { addDays, format, startOfDay } from 'date-fns';
+import { ru } from 'date-fns/locale';
 import { toast } from 'sonner';
 import { useCrm } from '@/lib/store';
 import { STAFF_ID, uid } from '@/lib/seed';
-import { phoneLast10, normalizePhone, formatPhoneDisplay, telHref, smsHref } from '@/lib/phone';
+import { phoneLast10, normalizePhone, telHref, smsHref } from '@/lib/phone';
 import { hasConflict } from '@/lib/slots';
 import { formatVisitWhen } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import type { Appointment } from '@/lib/types';
 import { notifyOwnerNewVisit } from '@/lib/telegram-notify';
 import { scheduleFlush, flushNow } from '@/lib/crm-snapshot';
-import { WheelPicker, buildRangeOptions } from './WheelPicker';
+import { WheelPicker, buildRangeOptions, type WheelOption } from './WheelPicker';
 
-const DURATION_STEP = 15; // match settings.slotMinutes default
+const DURATION_STEP = 15; // match settings.slotMinutes / service steps
 const DURATION_MIN = 15;
 const DURATION_MAX = 240;
-const MINUTE_STEP = 10;
+const DURATION_HOUR_MAX = Math.floor(DURATION_MAX / 60);
+const MINUTE_STEP = 10; // start-time minute grid
 
 const HOUR_OPTIONS = buildRangeOptions(0, 23, 1);
 const MINUTE_OPTIONS = buildRangeOptions(0, 50, MINUTE_STEP);
-const DURATION_OPTIONS = buildRangeOptions(DURATION_MIN, DURATION_MAX, DURATION_STEP, ' мин');
+const DUR_HOUR_OPTIONS = buildRangeOptions(0, DURATION_HOUR_MAX, 1);
+const DUR_MINUTE_OPTIONS = buildRangeOptions(0, 45, DURATION_STEP);
+
+type WheelPanel = null | 'duration' | 'datetime' | 'time';
+
+function formatDurationRu(totalMin: number): string {
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h <= 0) return `${m} мин`;
+  if (m === 0) return `${h} ч 00 мин`;
+  return `${h} ч ${String(m).padStart(2, '0')} мин`;
+}
+
+function buildDateOptions(center: Date, pastDays = 7, futureDays = 90): WheelOption[] {
+  const base = startOfDay(center);
+  const out: WheelOption[] = [];
+  for (let i = -pastDays; i <= futureDays; i++) {
+    const d = addDays(base, i);
+    const value = +startOfDay(d);
+    const label = format(d, 'EEE d MMM', { locale: ru });
+    out.push({ value, label });
+  }
+  return out;
+}
 
 export type BookingMode =
   | { kind: 'new'; start: Date }
@@ -56,11 +81,14 @@ export function BookingSheet({
   const [error, setError] = useState('');
   /** Collapsed by default when editing/moving with services already chosen; expanded for new. */
   const [servicesOpen, setServicesOpen] = useState(true);
+  /** Only one wheel expander open at a time; idle = compact summary rows. */
+  const [wheelPanel, setWheelPanel] = useState<WheelPanel>(null);
 
   useEffect(() => {
     if (!mode) return;
     setError('');
     setConfirmDel(false);
+    setWheelPanel(null);
     if (mode.kind === 'new') {
       setPhone('');
       setName('');
@@ -127,6 +155,12 @@ export function BookingSheet({
 
   const duration = mode?.kind === 'window' ? winDur : durationMin;
 
+  const dateOptions = useMemo(() => {
+    const center = startLocal ? new Date(startLocal) : new Date();
+    const safe = Number.isNaN(+center) ? new Date() : center;
+    return buildDateOptions(safe);
+  }, [startLocal ? startLocal.slice(0, 10) : '']);
+
   const lastVisitHint = useMemo(() => {
     const last10 = phoneLast10(phone);
     if (last10.length < 10) return null;
@@ -142,6 +176,10 @@ export function BookingSheet({
   }, [phone, state.clients, state.appointments, state.services]);
 
   if (!open || !mode) return null;
+
+  function togglePanel(panel: Exclude<WheelPanel, null>) {
+    setWheelPanel((cur) => (cur === panel ? null : panel));
+  }
 
   function toggleSvc(id: string) {
     setServiceIds((prev) => {
@@ -160,7 +198,6 @@ export function BookingSheet({
       const d = prev ? new Date(prev) : new Date();
       if (Number.isNaN(+d)) return prev;
       d.setHours(hour);
-      // keep minutes on 10-min grid for the wheel
       let m = d.getMinutes();
       m = Math.round(m / MINUTE_STEP) * MINUTE_STEP;
       if (m >= 60) m = 60 - MINUTE_STEP;
@@ -178,25 +215,60 @@ export function BookingSheet({
     });
   }
 
+  function setStartDateValue(dayMs: number) {
+    setStartLocal((prev) => {
+      const d = prev ? new Date(prev) : new Date();
+      if (Number.isNaN(+d)) return prev;
+      const day = new Date(dayMs);
+      d.setFullYear(day.getFullYear(), day.getMonth(), day.getDate());
+      return toLocalInput(d);
+    });
+  }
+
+  function clampDuration(total: number) {
+    return Math.min(DURATION_MAX, Math.max(DURATION_MIN, Math.round(total / DURATION_STEP) * DURATION_STEP));
+  }
+
+  function setDurationHours(hours: number, currentTotal: number, setter: (n: number) => void) {
+    let mins = currentTotal % 60;
+    mins = Math.round(mins / DURATION_STEP) * DURATION_STEP;
+    if (mins >= 60) mins = 60 - DURATION_STEP;
+    let total = hours * 60 + mins;
+    if (total < DURATION_MIN) total = DURATION_MIN;
+    if (total > DURATION_MAX) total = DURATION_MAX;
+    setter(clampDuration(total));
+  }
+
+  function setDurationMinutes(mins: number, currentTotal: number, setter: (n: number) => void) {
+    const hours = Math.floor(currentTotal / 60);
+    let total = hours * 60 + mins;
+    if (total < DURATION_MIN) total = DURATION_MIN;
+    if (total > DURATION_MAX) total = DURATION_MAX;
+    setter(clampDuration(total));
+  }
+
   const startParsed = startLocal ? new Date(startLocal) : null;
   const startValid = !!startParsed && !Number.isNaN(+startParsed);
   const startHour = startValid ? startParsed!.getHours() : 10;
   const startMinuteRaw = startValid ? startParsed!.getMinutes() : 0;
   const startMinute =
     Math.min(60 - MINUTE_STEP, Math.max(0, Math.round(startMinuteRaw / MINUTE_STEP) * MINUTE_STEP));
+  const startDateValue = startValid ? +startOfDay(startParsed!) : +startOfDay(new Date());
   const endHint =
     startValid && duration
       ? formatVisitWhen(new Date(+startParsed! + duration * 60000).toISOString()).time
       : null;
 
-  const durationWheelValue = Math.min(
-    DURATION_MAX,
-    Math.max(DURATION_MIN, Math.round(durationMin / DURATION_STEP) * DURATION_STEP),
-  );
-  const winDurWheelValue = Math.min(
-    DURATION_MAX,
-    Math.max(DURATION_MIN, Math.round(winDur / DURATION_STEP) * DURATION_STEP),
-  );
+  const durationClamped = clampDuration(durationMin);
+  const winDurClamped = clampDuration(winDur);
+  const durHours = Math.floor(durationClamped / 60);
+  const durMins = durationClamped % 60;
+  const winHours = Math.floor(winDurClamped / 60);
+  const winMins = winDurClamped % 60;
+
+  const datetimeSummary = startValid
+    ? format(startParsed!, "d MMM, HH:mm", { locale: ru })
+    : '—';
 
   function save() {
     setError('');
@@ -326,36 +398,36 @@ export function BookingSheet({
         <div className="p-4 space-y-3">
           {mode.kind === 'window' ? (
             <>
-              <label className="block text-xs text-gray-500">
-                Дата
-                <input
-                  type="date"
-                  className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm"
-                  value={startLocal.slice(0, 10)}
-                  onChange={(e) => {
-                    const datePart = e.target.value;
-                    const timePart = startLocal.includes('T') ? startLocal.slice(11, 16) : '10:00';
-                    setStartLocal(`${datePart}T${timePart}`);
-                  }}
+              <CollapsibleWheel
+                open={wheelPanel === 'datetime'}
+                onToggle={() => togglePanel('datetime')}
+                label="Дата и время"
+                summary={datetimeSummary}
+              >
+                <DateTimeWheels
+                  dateOptions={dateOptions}
+                  dateValue={startDateValue}
+                  hour={startHour}
+                  minute={startMinute}
+                  onDateChange={setStartDateValue}
+                  onHourChange={setStartHour}
+                  onMinuteChange={setStartMinute}
+                  endHint={endHint}
                 />
-              </label>
-              <TimeWheels
-                hour={startHour}
-                minute={startMinute}
-                onHourChange={setStartHour}
-                onMinuteChange={setStartMinute}
-                endHint={endHint}
-              />
-              <div className="rounded-xl border border-gray-200 px-3 py-2">
-                <div className="text-xs text-gray-500 mb-1 text-center">Длительность окна</div>
-                <WheelPicker
-                  options={DURATION_OPTIONS}
-                  value={winDurWheelValue}
-                  onChange={setWinDur}
-                  aria-label="Длительность окна"
+              </CollapsibleWheel>
+              <CollapsibleWheel
+                open={wheelPanel === 'duration'}
+                onToggle={() => togglePanel('duration')}
+                label="Длительность окна"
+                summary={formatDurationRu(winDurClamped)}
+              >
+                <DurationWheels
+                  hours={winHours}
+                  minutes={winMins}
+                  onHoursChange={(h) => setDurationHours(h, winDurClamped, setWinDur)}
+                  onMinutesChange={(m) => setDurationMinutes(m, winDurClamped, setWinDur)}
                 />
-                <p className="text-[11px] text-gray-400 text-center mt-1">Листайте · шаг {DURATION_STEP} мин</p>
-              </div>
+              </CollapsibleWheel>
             </>
           ) : (
             <>
@@ -436,54 +508,45 @@ export function BookingSheet({
                     ))}
                   </div>
                 )}
-                <div className="mt-3 rounded-xl border border-gray-200 px-3 py-2">
-                  <div className="text-xs text-gray-500 text-center mb-1">
-                    Длительность
-                    {servicesSum > 0 && servicesSum !== durationMin && (
-                      <span className="ml-1 text-gray-400 font-normal">(услуги {servicesSum} мин)</span>
-                    )}
-                  </div>
-                  <WheelPicker
-                    options={DURATION_OPTIONS}
-                    value={durationWheelValue}
-                    onChange={setDurationMin}
-                    aria-label="Длительность"
-                  />
-                  <p className="text-[11px] text-gray-400 text-center mt-1">
-                    Листайте · шаг {DURATION_STEP} мин · сейчас {durationMin} мин
-                  </p>
-                </div>
               </div>
 
-              <div className="rounded-xl border border-gray-200 px-3 py-2.5 text-sm">
-                <span className="text-xs text-gray-500 block">Дата и время</span>
-                {startLocal ? formatVisitWhen(new Date(startLocal).toISOString()).full : '—'}
-                {endHint && (
-                  <span className="block text-xs text-gray-400 mt-0.5">Окончание ≈ {endHint}</span>
-                )}
-              </div>
-              <div className="space-y-2">
-                <label className="block text-xs text-gray-500">
-                  Дата
-                  <input
-                    type="date"
-                    className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm"
-                    value={startLocal.slice(0, 10)}
-                    onChange={(e) => {
-                      const datePart = e.target.value;
-                      const timePart = startLocal.includes('T') ? startLocal.slice(11, 16) : '10:00';
-                      setStartLocal(`${datePart}T${timePart}`);
-                    }}
-                  />
-                </label>
-                <TimeWheels
+              <CollapsibleWheel
+                open={wheelPanel === 'duration'}
+                onToggle={() => togglePanel('duration')}
+                label="Длительность"
+                summary={
+                  servicesSum > 0 && servicesSum !== durationMin
+                    ? `${formatDurationRu(durationClamped)} · услуги ${servicesSum} мин`
+                    : formatDurationRu(durationClamped)
+                }
+              >
+                <DurationWheels
+                  hours={durHours}
+                  minutes={durMins}
+                  onHoursChange={(h) => setDurationHours(h, durationClamped, setDurationMin)}
+                  onMinutesChange={(m) => setDurationMinutes(m, durationClamped, setDurationMin)}
+                />
+              </CollapsibleWheel>
+
+              <CollapsibleWheel
+                open={wheelPanel === 'datetime'}
+                onToggle={() => togglePanel('datetime')}
+                label="Дата и время"
+                summary={
+                  endHint ? `${datetimeSummary} · до ≈ ${endHint}` : datetimeSummary
+                }
+              >
+                <DateTimeWheels
+                  dateOptions={dateOptions}
+                  dateValue={startDateValue}
                   hour={startHour}
                   minute={startMinute}
+                  onDateChange={setStartDateValue}
                   onHourChange={setStartHour}
                   onMinuteChange={setStartMinute}
                   endHint={endHint}
                 />
-              </div>
+              </CollapsibleWheel>
 
               <button
                 type="button"
@@ -553,22 +616,117 @@ export function BookingSheet({
   );
 }
 
-function TimeWheels({
+function CollapsibleWheel({
+  open,
+  onToggle,
+  label,
+  summary,
+  children,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  label: string;
+  summary: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-gray-200 overflow-hidden">
+      <button
+        type="button"
+        className="w-full flex items-center gap-2 min-h-11 px-3 py-2.5 text-left active:bg-gray-50"
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <span className="flex-1 min-w-0">
+          <span className="text-xs text-gray-500 block">{label}</span>
+          <span className="text-sm font-medium text-gray-900 truncate block">{summary}</span>
+        </span>
+        <span className="text-gray-400 text-sm shrink-0" aria-hidden>
+          {open ? '▾' : '▸'}
+        </span>
+      </button>
+      {open && <div className="border-t border-gray-100 px-3 py-2">{children}</div>}
+    </div>
+  );
+}
+
+function DurationWheels({
+  hours,
+  minutes,
+  onHoursChange,
+  onMinutesChange,
+}: {
+  hours: number;
+  minutes: number;
+  onHoursChange: (h: number) => void;
+  onMinutesChange: (m: number) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="flex gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-xs text-gray-500 text-center mb-1">Часы</div>
+          <WheelPicker
+            options={DUR_HOUR_OPTIONS}
+            value={hours}
+            onChange={onHoursChange}
+            aria-label="Часы длительности"
+          />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs text-gray-500 text-center mb-1">Минуты</div>
+          <WheelPicker
+            options={DUR_MINUTE_OPTIONS}
+            value={minutes}
+            onChange={onMinutesChange}
+            aria-label="Минуты длительности"
+          />
+        </div>
+      </div>
+      <p className="text-[11px] text-gray-400 text-center">
+        Листайте · минуты шаг {DURATION_STEP} · {formatDurationRu(hours * 60 + minutes)}
+      </p>
+    </div>
+  );
+}
+
+function DateTimeWheels({
+  dateOptions,
+  dateValue,
   hour,
   minute,
+  onDateChange,
   onHourChange,
   onMinuteChange,
   endHint,
 }: {
+  dateOptions: WheelOption[];
+  dateValue: number;
   hour: number;
   minute: number;
+  onDateChange: (dayMs: number) => void;
   onHourChange: (h: number) => void;
   onMinuteChange: (m: number) => void;
   endHint: string | null;
 }) {
+  const nearestDate =
+    dateOptions.find((o) => o.value === dateValue)?.value ??
+    dateOptions.reduce((best, o) =>
+      Math.abs(o.value - dateValue) < Math.abs(best - dateValue) ? o.value : best,
+    dateOptions[0]?.value ?? dateValue);
+
   return (
-    <div className="rounded-xl border border-gray-200 p-3 space-y-1">
-      <div className="flex gap-3">
+    <div className="space-y-1">
+      <div className="flex gap-2">
+        <div className="flex-[1.4] min-w-0">
+          <div className="text-xs text-gray-500 text-center mb-1">Дата</div>
+          <WheelPicker
+            options={dateOptions}
+            value={nearestDate}
+            onChange={onDateChange}
+            aria-label="Дата"
+          />
+        </div>
         <div className="flex-1 min-w-0">
           <div className="text-xs text-gray-500 text-center mb-1">Часы</div>
           <WheelPicker
@@ -579,7 +737,7 @@ function TimeWheels({
           />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-xs text-gray-500 text-center mb-1">Минуты</div>
+          <div className="text-xs text-gray-500 text-center mb-1">Мин</div>
           <WheelPicker
             options={MINUTE_OPTIONS}
             value={minute}
@@ -589,7 +747,7 @@ function TimeWheels({
         </div>
       </div>
       <p className="text-[11px] text-gray-400 text-center">
-        Листайте · минуты шаг {MINUTE_STEP}
+        Листайте · время шаг {MINUTE_STEP} мин
         {endHint ? ` · конец ≈ ${endHint}` : ''}
       </p>
     </div>
