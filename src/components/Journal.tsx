@@ -3,17 +3,18 @@ import {
   addDays,
   addMinutes,
   format,
-  startOfDay,
   startOfWeek,
   differenceInMinutes,
 } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { toast } from 'sonner';
 import { useCrm } from '@/lib/store';
 import { flushNow } from '@/lib/crm-snapshot';
 import { STAFF_ID } from '@/lib/seed';
 import { getDayPlan } from '@/lib/schedule';
 import { WEEKDAY_SHORT } from '@/lib/format';
 import { telHref, smsHref } from '@/lib/phone';
+import { hasConflict } from '@/lib/slots';
 import { cn } from '@/lib/cn';
 import type { BookingMode } from './BookingSheet';
 import { mskDateKey, mskDow, parseApStart } from '@/lib/msk';
@@ -40,12 +41,27 @@ export function Journal({
     appointmentId: string;
   } | null>(null);
   const [slotMenu, setSlotMenu] = useState<Date | null>(null);
+  /** Live drag preview: snapped top offset in px from grid start */
+  const [dragPreview, setDragPreview] = useState<{
+    id: string;
+    topPx: number;
+    mins: number;
+  } | null>(null);
   const longPressTimer = useRef<number | null>(null);
   const longPressed = useRef(false);
   const stripRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const stripSwipe = useRef<{ x: number; moved: boolean } | null>(null);
   const gridSwipe = useRef<{ x: number; y: number } | null>(null);
+  const dragRef = useRef<{
+    id: string;
+    startY: number;
+    origTopPx: number;
+    heightPx: number;
+    durationMin: number;
+    pointerId: number;
+  } | null>(null);
+  const dragPreviewRef = useRef<{ id: string; topPx: number; mins: number } | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30000);
@@ -84,24 +100,114 @@ export function Journal({
     }
   }
 
-  function onCardPointerDown(e: React.PointerEvent, appointmentId: string) {
+  function snapMinsFromTopPx(topPx: number, durationMin: number) {
+    const maxTopMin = Math.max(0, totalMin - durationMin);
+    const rawMin = (topPx / PX_PER_HOUR) * 60;
+    let snapped = Math.round(rawMin / SLOT_MIN) * SLOT_MIN;
+    snapped = Math.max(0, Math.min(maxTopMin, snapped));
+    return snapped;
+  }
+
+  function onCardPointerDown(
+    e: React.PointerEvent,
+    appointmentId: string,
+    origTopPx: number,
+    durationMin: number,
+  ) {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    e.stopPropagation();
     longPressed.current = false;
-    const x = e.clientX;
-    const y = e.clientY;
+    setMenu(null);
     clearLP();
+    const heightPx = Math.max(24, (durationMin / 60) * PX_PER_HOUR);
+    dragRef.current = {
+      id: appointmentId,
+      startY: e.clientY,
+      origTopPx,
+      heightPx,
+      durationMin,
+      pointerId: e.pointerId,
+    };
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
     longPressTimer.current = window.setTimeout(() => {
       longPressed.current = true;
-      setMenu({ x, y, appointmentId });
+      const d = dragRef.current;
+      if (!d || d.id !== appointmentId) return;
+      setDragPreviewBoth({ id: appointmentId, topPx: d.origTopPx, mins: snapMinsFromTopPx(d.origTopPx, d.durationMin) });
+      gridSwipe.current = null; // don't change day while dragging
       try {
-        navigator.vibrate?.(12);
+        navigator.vibrate?.(14);
       } catch {}
-    }, 450);
+    }, 420);
+  }
+
+  function onCardPointerMove(e: React.PointerEvent, appointmentId: string) {
+    const d = dragRef.current;
+    if (!d || d.id !== appointmentId) return;
+    const dy = e.clientY - d.startY;
+    if (!longPressed.current) {
+      // Cancel pending long-press if finger slid before activation (avoid accidental drag)
+      if (Math.abs(dy) > 12) clearLP();
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const rawTop = d.origTopPx + dy;
+    const mins = snapMinsFromTopPx(rawTop, d.durationMin);
+    const topPx = (mins / 60) * PX_PER_HOUR;
+    setDragPreviewBoth({ id: appointmentId, topPx, mins });
+  }
+
+  function setDragPreviewBoth(p: { id: string; topPx: number; mins: number } | null) {
+    dragPreviewRef.current = p;
+    setDragPreview(p);
+  }
+
+  function finishDrag(appointmentId: string) {
+    const d = dragRef.current;
+    const preview = dragPreviewRef.current;
+    clearLP();
+    dragRef.current = null;
+
+    if (!longPressed.current) {
+      setDragPreviewBoth(null);
+      onBooking({ kind: 'edit', appointmentId });
+      return;
+    }
+
+    longPressed.current = false;
+    setDragPreviewBoth(null);
+
+    if (!gridStart || !d || d.id !== appointmentId) return;
+    const mins = preview && preview.id === appointmentId ? preview.mins : snapMinsFromTopPx(d.origTopPx, d.durationMin);
+    // No-op if same slot
+    const appt = state.appointments.find((a) => a.id === appointmentId);
+    if (!appt) return;
+    const newStart = addMinutes(gridStart, mins);
+    const oldStart = parseApStart(appt.start);
+    if (+newStart === +oldStart) return;
+
+    const err = hasConflict(state.getSnapshot(), STAFF_ID, newStart, appt.durationMin, appt.id);
+    if (err) {
+      toast.error(err);
+      return;
+    }
+    state.upsertAppointment({ ...appt, start: newStart.toISOString() });
+    void flushNow(() => state.getSnapshot());
+    toast.success(`Перенесено на ${format(newStart, 'HH:mm')}`);
   }
 
   function onCardPointerUp(appointmentId: string) {
+    finishDrag(appointmentId);
+  }
+
+  function onCardPointerCancel(_appointmentId: string) {
     clearLP();
-    if (longPressed.current) return;
-    onBooking({ kind: 'edit', appointmentId });
+    dragRef.current = null;
+    longPressed.current = false;
+    setDragPreviewBoth(null);
   }
 
   // strip swipe ±7 days without accidental day tap
@@ -274,24 +380,39 @@ export function Journal({
               const s = parseApStart(a.start);
               const client = state.clients.find((c) => c.id === a.clientId);
               const color = a.color || state.settings.visitColor || '#6b7280';
+              const origTop = (minFromTop(s) / 60) * PX_PER_HOUR;
+              const isDragging = dragPreview?.id === a.id;
+              const top = isDragging ? dragPreview!.topPx : origTop;
+              const showTime = isDragging && gridStart
+                ? format(addMinutes(gridStart, dragPreview!.mins), 'HH:mm')
+                : format(s, 'HH:mm');
               return (
                 <div
                   key={a.id}
-                  className="absolute left-10 right-1 rounded-lg text-white px-2 py-1 z-10 overflow-hidden shadow-sm select-none"
+                  className={cn(
+                    'absolute left-10 right-1 rounded-lg text-white px-2 py-1 z-10 overflow-hidden shadow-sm select-none',
+                    isDragging && 'z-30 ring-2 ring-white/80 shadow-lg scale-[1.02]',
+                  )}
                   style={{
-                    top: (minFromTop(s) / 60) * PX_PER_HOUR,
+                    top,
                     height: Math.max(24, (a.durationMin / 60) * PX_PER_HOUR),
                     background: color,
                     touchAction: 'none',
+                    opacity: isDragging ? 0.95 : 1,
+                    transition: isDragging ? 'none' : 'top 120ms ease-out',
                   }}
-                  onPointerDown={(e) => onCardPointerDown(e, a.id)}
+                  onPointerDown={(e) => onCardPointerDown(e, a.id, origTop, a.durationMin)}
+                  onPointerMove={(e) => onCardPointerMove(e, a.id)}
                   onPointerUp={() => onCardPointerUp(a.id)}
-                  onPointerCancel={clearLP}
-                  onPointerLeave={clearLP}
-                  onContextMenu={(e) => e.preventDefault()}
+                  onPointerCancel={() => onCardPointerCancel(a.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    // Secondary: long-press context menu via right-click / two-finger (desktop)
+                    setMenu({ x: e.clientX, y: e.clientY, appointmentId: a.id });
+                  }}
                 >
                   <div className="text-[11px] font-semibold leading-tight">
-                    {format(s, 'HH:mm')} · {client?.name || 'Клиент'}
+                    {showTime} · {client?.name || 'Клиент'}
                   </div>
                   {a.durationMin >= 30 && (
                     <div className="text-[10px] opacity-90 truncate">
@@ -299,6 +420,11 @@ export function Journal({
                         .map((id) => state.services.find((sv) => sv.id === id)?.name)
                         .filter(Boolean)
                         .join(', ')}
+                    </div>
+                  )}
+                  {isDragging && (
+                    <div className="absolute bottom-1 right-1 text-[10px] bg-black/35 rounded px-1.5 py-0.5">
+                      перенос
                     </div>
                   )}
                 </div>

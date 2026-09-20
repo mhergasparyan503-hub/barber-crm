@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X, Phone, MessageSquare, Minus, Plus } from 'lucide-react';
+import { X, Phone, MessageSquare } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { toast } from 'sonner';
 import { useCrm } from '@/lib/store';
@@ -11,12 +11,16 @@ import { cn } from '@/lib/cn';
 import type { Appointment } from '@/lib/types';
 import { notifyOwnerNewVisit } from '@/lib/telegram-notify';
 import { scheduleFlush, flushNow } from '@/lib/crm-snapshot';
+import { WheelPicker, buildRangeOptions } from './WheelPicker';
 
-const DURATION_STEP = 15; // match settings.slotMinutes default / window chips
+const DURATION_STEP = 15; // match settings.slotMinutes default
 const DURATION_MIN = 15;
 const DURATION_MAX = 240;
-const HOUR_STEP_MIN = 60;
 const MINUTE_STEP = 10;
+
+const HOUR_OPTIONS = buildRangeOptions(0, 23, 1);
+const MINUTE_OPTIONS = buildRangeOptions(0, 50, MINUTE_STEP);
+const DURATION_OPTIONS = buildRangeOptions(DURATION_MIN, DURATION_MAX, DURATION_STEP, ' мин');
 
 export type BookingMode =
   | { kind: 'new'; start: Date }
@@ -151,53 +155,48 @@ export function BookingSheet({
     });
   }
 
-  function bumpDuration(delta: number) {
-    setDurationMin((prev) => {
-      const next = prev + delta;
-      return Math.min(DURATION_MAX, Math.max(DURATION_MIN, next));
-    });
-  }
-
-  function bumpStartMinutes(delta: number) {
+  function setStartHour(hour: number) {
     setStartLocal((prev) => {
       const d = prev ? new Date(prev) : new Date();
       if (Number.isNaN(+d)) return prev;
-      d.setMinutes(d.getMinutes() + delta);
+      d.setHours(hour);
+      // keep minutes on 10-min grid for the wheel
+      let m = d.getMinutes();
+      m = Math.round(m / MINUTE_STEP) * MINUTE_STEP;
+      if (m >= 60) m = 60 - MINUTE_STEP;
+      d.setMinutes(m, 0, 0);
       return toLocalInput(d);
     });
   }
 
-  function bumpStartHours(deltaHours: number) {
-    bumpStartMinutes(deltaHours * HOUR_STEP_MIN);
-  }
-
-  function bumpStartTenMinutes(deltaSteps: number) {
+  function setStartMinute(minute: number) {
     setStartLocal((prev) => {
       const d = prev ? new Date(prev) : new Date();
       if (Number.isNaN(+d)) return prev;
-      // Snap to 10-min grid in the direction of travel, then step
-      const m = d.getMinutes();
-      const snapped = Math.round(m / MINUTE_STEP) * MINUTE_STEP;
-      if (snapped !== m) {
-        d.setMinutes(snapped);
-        // If snap alone already moved toward the requested direction, stop here
-        if ((deltaSteps > 0 && snapped > m) || (deltaSteps < 0 && snapped < m)) {
-          return toLocalInput(d);
-        }
-      }
-      d.setMinutes(d.getMinutes() + deltaSteps * MINUTE_STEP);
+      d.setMinutes(minute, 0, 0);
       return toLocalInput(d);
     });
   }
 
   const startParsed = startLocal ? new Date(startLocal) : null;
   const startValid = !!startParsed && !Number.isNaN(+startParsed);
-  const startHourLabel = startValid ? String(startParsed!.getHours()).padStart(2, '0') : '—';
-  const startMinuteLabel = startValid ? String(startParsed!.getMinutes()).padStart(2, '0') : '—';
+  const startHour = startValid ? startParsed!.getHours() : 10;
+  const startMinuteRaw = startValid ? startParsed!.getMinutes() : 0;
+  const startMinute =
+    Math.min(60 - MINUTE_STEP, Math.max(0, Math.round(startMinuteRaw / MINUTE_STEP) * MINUTE_STEP));
   const endHint =
     startValid && duration
       ? formatVisitWhen(new Date(+startParsed! + duration * 60000).toISOString()).time
       : null;
+
+  const durationWheelValue = Math.min(
+    DURATION_MAX,
+    Math.max(DURATION_MIN, Math.round(durationMin / DURATION_STEP) * DURATION_STEP),
+  );
+  const winDurWheelValue = Math.min(
+    DURATION_MAX,
+    Math.max(DURATION_MIN, Math.round(winDur / DURATION_STEP) * DURATION_STEP),
+  );
 
   function save() {
     setError('');
@@ -340,29 +339,22 @@ export function BookingSheet({
                   }}
                 />
               </label>
-              <TimeSteppers
-                hourLabel={startHourLabel}
-                minuteLabel={startMinuteLabel}
-                onHourMinus={() => bumpStartHours(-1)}
-                onHourPlus={() => bumpStartHours(1)}
-                onMinuteMinus={() => bumpStartTenMinutes(-1)}
-                onMinutePlus={() => bumpStartTenMinutes(1)}
+              <TimeWheels
+                hour={startHour}
+                minute={startMinute}
+                onHourChange={setStartHour}
+                onMinuteChange={setStartMinute}
                 endHint={endHint}
               />
-              <div className="flex gap-2 flex-wrap">
-                {[15, 30, 45, 60, 90].map((d) => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setWinDur(d)}
-                    className={cn(
-                      'px-3 py-2 rounded-full text-sm border',
-                      winDur === d ? 'bg-accent text-white border-accent' : 'border-gray-200',
-                    )}
-                  >
-                    {d} мин
-                  </button>
-                ))}
+              <div className="rounded-xl border border-gray-200 px-3 py-2">
+                <div className="text-xs text-gray-500 mb-1 text-center">Длительность окна</div>
+                <WheelPicker
+                  options={DURATION_OPTIONS}
+                  value={winDurWheelValue}
+                  onChange={setWinDur}
+                  aria-label="Длительность окна"
+                />
+                <p className="text-[11px] text-gray-400 text-center mt-1">Листайте · шаг {DURATION_STEP} мин</p>
               </div>
             </>
           ) : (
@@ -444,40 +436,23 @@ export function BookingSheet({
                     ))}
                   </div>
                 )}
-                <div className="mt-3 rounded-xl border border-gray-200 px-3 py-2.5 flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs text-gray-500">Длительность</div>
-                    <div className="text-sm font-semibold text-gray-900 tabular-nums">
-                      {durationMin} мин
-                      {servicesSum > 0 && servicesSum !== durationMin && (
-                        <span className="ml-1.5 text-xs font-normal text-gray-400">
-                          (услуги {servicesSum})
-                        </span>
-                      )}
-                    </div>
+                <div className="mt-3 rounded-xl border border-gray-200 px-3 py-2">
+                  <div className="text-xs text-gray-500 text-center mb-1">
+                    Длительность
+                    {servicesSum > 0 && servicesSum !== durationMin && (
+                      <span className="ml-1 text-gray-400 font-normal">(услуги {servicesSum} мин)</span>
+                    )}
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      aria-label="Уменьшить длительность"
-                      onClick={() => bumpDuration(-DURATION_STEP)}
-                      disabled={durationMin <= DURATION_MIN}
-                      className="h-10 w-10 rounded-full border border-gray-200 flex items-center justify-center text-gray-700 active:bg-gray-100 disabled:opacity-40"
-                    >
-                      <Minus className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Увеличить длительность"
-                      onClick={() => bumpDuration(DURATION_STEP)}
-                      disabled={durationMin >= DURATION_MAX}
-                      className="h-10 w-10 rounded-full border border-gray-200 flex items-center justify-center text-gray-700 active:bg-gray-100 disabled:opacity-40"
-                    >
-                      <Plus className="h-4 w-4" />
-                    </button>
-                  </div>
+                  <WheelPicker
+                    options={DURATION_OPTIONS}
+                    value={durationWheelValue}
+                    onChange={setDurationMin}
+                    aria-label="Длительность"
+                  />
+                  <p className="text-[11px] text-gray-400 text-center mt-1">
+                    Листайте · шаг {DURATION_STEP} мин · сейчас {durationMin} мин
+                  </p>
                 </div>
-                <p className="text-[11px] text-gray-400 mt-1">Шаг {DURATION_STEP} мин · можно менять вручную</p>
               </div>
 
               <div className="rounded-xl border border-gray-200 px-3 py-2.5 text-sm">
@@ -501,13 +476,11 @@ export function BookingSheet({
                     }}
                   />
                 </label>
-                <TimeSteppers
-                  hourLabel={startHourLabel}
-                  minuteLabel={startMinuteLabel}
-                  onHourMinus={() => bumpStartHours(-1)}
-                  onHourPlus={() => bumpStartHours(1)}
-                  onMinuteMinus={() => bumpStartTenMinutes(-1)}
-                  onMinutePlus={() => bumpStartTenMinutes(1)}
+                <TimeWheels
+                  hour={startHour}
+                  minute={startMinute}
+                  onHourChange={setStartHour}
+                  onMinuteChange={setStartMinute}
                   endHint={endHint}
                 />
               </div>
@@ -580,75 +553,43 @@ export function BookingSheet({
   );
 }
 
-function TimeSteppers({
-  hourLabel,
-  minuteLabel,
-  onHourMinus,
-  onHourPlus,
-  onMinuteMinus,
-  onMinutePlus,
+function TimeWheels({
+  hour,
+  minute,
+  onHourChange,
+  onMinuteChange,
   endHint,
 }: {
-  hourLabel: string;
-  minuteLabel: string;
-  onHourMinus: () => void;
-  onHourPlus: () => void;
-  onMinuteMinus: () => void;
-  onMinutePlus: () => void;
+  hour: number;
+  minute: number;
+  onHourChange: (h: number) => void;
+  onMinuteChange: (m: number) => void;
   endHint: string | null;
 }) {
   return (
-    <div className="rounded-xl border border-gray-200 p-3 space-y-2.5">
-      <div className="flex items-center gap-3">
+    <div className="rounded-xl border border-gray-200 p-3 space-y-1">
+      <div className="flex gap-3">
         <div className="flex-1 min-w-0">
-          <div className="text-xs text-gray-500">Часы</div>
-          <div className="text-lg font-semibold tabular-nums text-gray-900">{hourLabel}</div>
+          <div className="text-xs text-gray-500 text-center mb-1">Часы</div>
+          <WheelPicker
+            options={HOUR_OPTIONS}
+            value={hour}
+            onChange={onHourChange}
+            aria-label="Часы"
+          />
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            type="button"
-            aria-label="Минус 1 час"
-            onClick={onHourMinus}
-            className="h-11 w-11 rounded-full border border-gray-200 flex items-center justify-center text-gray-700 active:bg-gray-100"
-          >
-            <Minus className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            aria-label="Плюс 1 час"
-            onClick={onHourPlus}
-            className="h-11 w-11 rounded-full border border-gray-200 flex items-center justify-center text-gray-700 active:bg-gray-100"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs text-gray-500 text-center mb-1">Минуты</div>
+          <WheelPicker
+            options={MINUTE_OPTIONS}
+            value={minute}
+            onChange={onMinuteChange}
+            aria-label="Минуты"
+          />
         </div>
       </div>
-      <div className="flex items-center gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="text-xs text-gray-500">Минуты</div>
-          <div className="text-lg font-semibold tabular-nums text-gray-900">{minuteLabel}</div>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            type="button"
-            aria-label="Минус 10 минут"
-            onClick={onMinuteMinus}
-            className="h-11 w-11 rounded-full border border-gray-200 flex items-center justify-center text-gray-700 active:bg-gray-100"
-          >
-            <Minus className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            aria-label="Плюс 10 минут"
-            onClick={onMinutePlus}
-            className="h-11 w-11 rounded-full border border-gray-200 flex items-center justify-center text-gray-700 active:bg-gray-100"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-      <p className="text-[11px] text-gray-400">
-        Шаг: часы ±1 ч · минуты ±{MINUTE_STEP} мин
+      <p className="text-[11px] text-gray-400 text-center">
+        Листайте · минуты шаг {MINUTE_STEP}
         {endHint ? ` · конец ≈ ${endHint}` : ''}
       </p>
     </div>
