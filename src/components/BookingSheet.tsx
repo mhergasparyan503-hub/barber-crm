@@ -270,22 +270,45 @@ export function BookingSheet({
     ? format(startParsed!, "d MMM, HH:mm", { locale: ru })
     : '—';
 
+  function saveEmptyWindow(duration: number) {
+    const start = new Date(startLocal);
+    if (Number.isNaN(+start)) {
+      setError('Некорректная дата');
+      return;
+    }
+    const dur = clampDuration(duration || 30);
+    const err = hasConflict(state.getSnapshot(), STAFF_ID, start, dur);
+    if (err) {
+      setError(err);
+      return;
+    }
+    state.addWindow({
+      staffId: STAFF_ID,
+      start: start.toISOString(),
+      durationMin: dur,
+      label: 'Окно',
+    });
+    scheduleFlush(() => state.getSnapshot());
+    toast.success('Пустое окно создано');
+    onClose();
+  }
+
   function save() {
     setError('');
     if (mode!.kind === 'window') {
-      const start = new Date(startLocal);
-      const err = hasConflict(state.getSnapshot(), STAFF_ID, start, winDur);
-      if (err) {
-        setError(err);
-        return;
-      }
-      state.addWindow({ staffId: STAFF_ID, start: start.toISOString(), durationMin: winDur, label: 'Окно' });
-      toast.success('Пустое окно создано');
-      onClose();
+      saveEmptyWindow(winDur);
       return;
     }
 
     const nPhone = normalizePhone(phone);
+    const emptyClient = !name.trim() && phoneLast10(nPhone).length < 10;
+    const emptyServices = !serviceIds.length;
+    // Новая запись без клиента и услуг → свободное окно (как в YCLIENTS).
+    if (mode!.kind === 'new' && emptyClient && emptyServices) {
+      saveEmptyWindow(durationMin);
+      return;
+    }
+
     if (!name.trim()) {
       setError('Укажите имя');
       return;
@@ -584,6 +607,12 @@ export function BookingSheet({
           )}
 
           {error && <p className="text-sm text-red-600">{error}</p>}
+
+          {mode.kind === 'new' && !name.trim() && !phone.trim() && !serviceIds.length && (
+            <p className="text-xs text-gray-500 text-center">
+              Без клиента и услуг сохранится как свободное окно
+            </p>
+          )}
 
           <button
             type="button"

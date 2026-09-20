@@ -367,10 +367,19 @@ export function Journal({
                   }}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (confirm('Удалить пустое окно?')) state.deleteWindow(w.id);
+                    if (confirm('Удалить пустое окно?')) {
+                      state.deleteWindow(w.id);
+                      void flushNow(() => state.getSnapshot());
+                      toast.success('Окно удалено');
+                    }
                   }}
                 >
-                  <span className="text-[11px] text-gray-700 font-medium">{w.label || 'Окно'}</span>
+                  <span className="text-[11px] text-gray-700 font-medium">
+                    {format(s, 'HH:mm')} · {w.label || 'Окно'}
+                  </span>
+                  {w.durationMin >= 30 && (
+                    <span className="block text-[10px] text-gray-600">Свободное окно · {w.durationMin} мин</span>
+                  )}
                 </button>
               );
             })}
