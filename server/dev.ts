@@ -17,6 +17,7 @@ import { withCrmLock, mergeIncoming, stampChanges, publicView } from './crm-merg
 import { buildReminders, mskWallISO } from '../src/lib/msk';
 import { normalizePhone, phoneLast10 } from '../src/lib/phone';
 import fs from 'fs';
+import * as auth from './auth';
 import path from 'path';
 
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
@@ -41,7 +42,8 @@ async function ensureWebhook(token: string, base: string | null) {
   if (!base) return { mode: 'none' as const };
   const url = `${base}/api/telegram`;
   try {
-    await setWebhook(token, url);
+    const r = await setWebhook(token, url, auth.webhookSecret());
+    if (r && r.ok === false) console.error('setWebhook error', r.error_code, r.description);
   } catch (e) {
     console.error('setWebhook failed (will retry)', e);
     return { mode: 'webhook' as const, url, error: true as const };
@@ -53,6 +55,178 @@ async function main() {
   const app = new Hono();
 
   app.get('/api/health', (c) => c.json({ ok: true }));
+
+  // ---------- Auth ----------
+  const PUBLIC_API = (p: string, method: string) =>
+    p === '/api/health' ||
+    (p === '/api/telegram' && method === 'POST') ||
+    p.startsWith('/api/public/') ||
+    p.startsWith('/api/auth/');
+  const isSecure = (c: any) =>
+    c.req.header('x-forwarded-proto') === 'https' || process.env.NODE_ENV === 'production';
+  const clientIp = (c: any) =>
+    c.req.header('x-real-ip') || (c.req.header('x-forwarded-for') || '').split(',')[0].trim() || 'local';
+  const sessToken = (c: any) => auth.readCookie(c.req.header('cookie'));
+
+  app.use('/api/*', async (c, next) => {
+    if (PUBLIC_API(c.req.path, c.req.method)) return next();
+    if (!auth.sessionValid(sessToken(c))) {
+      return c.json({ ok: false, error: 'unauthorized' }, 401);
+    }
+    return next();
+  });
+
+  async function tellMaster(text: string): Promise<boolean> {
+    const snap = (await loadCrmSnapshot()) as any;
+    const token = snap?.settings?.telegramToken;
+    const chat = snap?.settings?.telegramOwnerChatId;
+    if (!token || !chat) return false;
+    const r = await sendMessage(token, chat, text).catch(() => null);
+    return !!r?.ok;
+  }
+
+  const MIN15 = 15 * 60 * 1000;
+  const loginBlocked = (c: any, email: string) =>
+    auth.limited('ip:' + clientIp(c), 5, MIN15) || auth.limited('em:' + email, 5, MIN15);
+  const loginFailed = async (c: any, email: string) => {
+    const n = Math.max(auth.hit('ip:' + clientIp(c), MIN15), auth.hit('em:' + email, MIN15));
+    if (n === 5) {
+      void tellMaster(
+        `⚠️ CRM: 5 неудачных попыток входа подряд (IP ${clientIp(c)}). Вход временно заблокирован на 15 минут.\nЕсли это не вы — ничего не делайте, пароль не раскрыт.`,
+      );
+    }
+  };
+  const loggedIn = (c: any) => {
+    const t = auth.createSession();
+    c.header('Set-Cookie', auth.sessionCookie(t, isSecure(c)));
+    return t;
+  };
+
+  app.get('/api/auth/status', async (c) => {
+    const snap = (await loadCrmSnapshot()) as any;
+    const authed = auth.sessionValid(sessToken(c));
+    return c.json({
+      hasAccount: auth.hasAccount(),
+      authed,
+      email: authed ? auth.accountEmail() : undefined,
+      masterTelegram: !!(snap?.settings?.telegramToken && snap?.settings?.telegramOwnerChatId),
+    });
+  });
+
+  app.post('/api/auth/code', async (c) => {
+    const b = (await c.req.json().catch(() => ({}))) as any;
+    const purpose = b?.purpose === 'reset' ? 'reset' : 'register';
+    if (purpose === 'register' && auth.hasAccount()) {
+      return c.json({ ok: false, error: 'Аккаунт уже создан. Войдите.' }, 409);
+    }
+    if (purpose === 'reset' && !auth.hasAccount()) {
+      return c.json({ ok: false, error: 'Аккаунт ещё не создан.' }, 400);
+    }
+    if (auth.limited('code:' + purpose, 1, 60_000) || auth.limited('codeh:' + purpose, 6, 60 * 60_000)) {
+      return c.json({ ok: false, error: 'Код уже отправлен. Повторить можно через минуту.' }, 429);
+    }
+    auth.hit('code:' + purpose, 60_000);
+    auth.hit('codeh:' + purpose, 60 * 60_000);
+    const code = auth.issueCode(purpose);
+    const text =
+      purpose === 'register'
+        ? `Код для регистрации в CRM: ${code}\nДействует 15 минут. Никому его не сообщайте.`
+        : `Код для сброса пароля CRM: ${code}\nДействует 15 минут. Если вы не запрашивали сброс — просто проигнорируйте.`;
+    const sent = await tellMaster(text);
+    if (sent) return c.json({ ok: true, via: 'telegram' });
+    if (purpose === 'register') {
+      // No master Telegram yet: code only in the server log (admin access).
+      console.log(`[auth] setup code (no master Telegram connected): ${code}`);
+      return c.json({ ok: true, via: 'log' });
+    }
+    return c.json({ ok: false, error: 'Telegram мастера не подключён — код отправить некуда.' }, 400);
+  });
+
+  app.post('/api/auth/register', async (c) => {
+    if (auth.hasAccount()) return c.json({ ok: false, error: 'Регистрация закрыта: аккаунт уже создан.' }, 409);
+    const b = (await c.req.json().catch(() => ({}))) as any;
+    const email = auth.normEmail(b?.email);
+    if (!auth.emailOk(email)) return c.json({ ok: false, error: 'Неверный email' }, 400);
+    if (!auth.passwordOk(b?.password)) return c.json({ ok: false, error: 'Пароль — минимум 8 символов' }, 400);
+    const r = auth.checkCode('register', b?.code);
+    if (r !== 'ok') {
+      return c.json({ ok: false, error: r === 'bad' ? 'Неверный код' : 'Код устарел — запросите новый' }, 400);
+    }
+    if (!auth.register(email, b.password)) return c.json({ ok: false, error: 'Регистрация закрыта' }, 409);
+    loggedIn(c);
+    void tellMaster(`✅ CRM: создан аккаунт владельца (${email}). Регистрация закрыта.`);
+    return c.json({ ok: true, email });
+  });
+
+  app.post('/api/auth/login', async (c) => {
+    const b = (await c.req.json().catch(() => ({}))) as any;
+    const email = auth.normEmail(b?.email);
+    if (loginBlocked(c, email)) {
+      return c.json({ ok: false, error: 'Слишком много попыток. Подождите 15 минут.' }, 429);
+    }
+    if (!auth.hasAccount()) return c.json({ ok: false, error: 'Аккаунт ещё не создан' }, 400);
+    if (!auth.checkLogin(email, String(b?.password || ''))) {
+      await loginFailed(c, email);
+      return c.json({ ok: false, error: 'Неверный email или пароль' }, 401);
+    }
+    auth.clearHits('ip:' + clientIp(c));
+    auth.clearHits('em:' + email);
+    loggedIn(c);
+    return c.json({ ok: true, email: auth.accountEmail() });
+  });
+
+  app.post('/api/auth/logout', (c) => {
+    auth.destroySession(sessToken(c));
+    c.header('Set-Cookie', auth.clearCookie(isSecure(c)));
+    return c.json({ ok: true });
+  });
+
+  app.post('/api/auth/reset', async (c) => {
+    if (!auth.hasAccount()) return c.json({ ok: false, error: 'Аккаунт ещё не создан' }, 400);
+    const b = (await c.req.json().catch(() => ({}))) as any;
+    if (!auth.passwordOk(b?.password)) return c.json({ ok: false, error: 'Пароль — минимум 8 символов' }, 400);
+    const r = auth.checkCode('reset', b?.code);
+    if (r !== 'ok') {
+      return c.json({ ok: false, error: r === 'bad' ? 'Неверный код' : 'Код устарел — запросите новый' }, 400);
+    }
+    auth.setPassword(b.password);
+    auth.destroyOtherSessions();
+    loggedIn(c);
+    void tellMaster('🔐 CRM: пароль сброшен по коду. Все другие входы завершены.');
+    return c.json({ ok: true, email: auth.accountEmail() });
+  });
+
+  app.post('/api/auth/change-password', async (c) => {
+    if (!auth.sessionValid(sessToken(c))) return c.json({ ok: false, error: 'unauthorized' }, 401);
+    const b = (await c.req.json().catch(() => ({}))) as any;
+    const key = 'chg:' + clientIp(c);
+    if (auth.limited(key, 5, MIN15)) return c.json({ ok: false, error: 'Слишком много попыток. Подождите 15 минут.' }, 429);
+    if (!auth.checkPassword(String(b?.current || ''))) {
+      auth.hit(key, MIN15);
+      return c.json({ ok: false, error: 'Текущий пароль неверный' }, 400);
+    }
+    if (!auth.passwordOk(b?.password)) return c.json({ ok: false, error: 'Новый пароль — минимум 8 символов' }, 400);
+    auth.setPassword(b.password);
+    auth.destroyOtherSessions(sessToken(c) || undefined);
+    void tellMaster('🔐 CRM: пароль изменён. Другие входы завершены.');
+    return c.json({ ok: true });
+  });
+
+  app.post('/api/auth/change-email', async (c) => {
+    if (!auth.sessionValid(sessToken(c))) return c.json({ ok: false, error: 'unauthorized' }, 401);
+    const b = (await c.req.json().catch(() => ({}))) as any;
+    const key = 'chg:' + clientIp(c);
+    if (auth.limited(key, 5, MIN15)) return c.json({ ok: false, error: 'Слишком много попыток. Подождите 15 минут.' }, 429);
+    if (!auth.checkPassword(String(b?.current || ''))) {
+      auth.hit(key, MIN15);
+      return c.json({ ok: false, error: 'Текущий пароль неверный' }, 400);
+    }
+    const email = auth.normEmail(b?.email);
+    if (!auth.emailOk(email)) return c.json({ ok: false, error: 'Неверный email' }, 400);
+    auth.setEmail(email);
+    void tellMaster(`✉️ CRM: email для входа изменён на ${email}.`);
+    return c.json({ ok: true, email });
+  });
 
   app.get('/api/crm/snapshot', async (c) => {
     const data = (await loadCrmSnapshot()) as any;
@@ -262,6 +436,10 @@ async function main() {
   });
 
   app.post('/api/telegram', async (c) => {
+    // Only Telegram knows the secret_token we set in setWebhook.
+    if (c.req.header('x-telegram-bot-api-secret-token') !== auth.webhookSecret()) {
+      return c.json({ ok: false }, 401);
+    }
     let update: any;
     try {
       update = await c.req.json();

@@ -17,9 +17,10 @@ export async function deleteWebhook(token: string) {
   return tg(token, 'deleteWebhook', { drop_pending_updates: false });
 }
 
-export async function setWebhook(token: string, url: string) {
+export async function setWebhook(token: string, url: string, secretToken?: string) {
   return tg(token, 'setWebhook', {
     url,
+    ...(secretToken ? { secret_token: secretToken } : {}),
     drop_pending_updates: false,
     allowed_updates: ['message', 'callback_query'],
   });
@@ -49,6 +50,7 @@ export async function sendMessage(
     const g = globalThis as any;
     g.__tgSent = g.__tgSent || [];
     g.__tgSent.push({ chatId: String(chatId), text, reply_markup });
+    if (process.env.TG_SMOKE_LOG === '1') console.log('[tg-capture]', chatId, JSON.stringify(text));
     return { ok: true, result: { message_id: g.__tgSent.length } };
   }
   const res = await tg(token, 'sendMessage', {

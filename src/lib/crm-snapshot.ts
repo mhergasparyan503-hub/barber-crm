@@ -1,8 +1,13 @@
+import { signalUnauthorized } from './server-auth';
 import type { CrmState } from './types';
 
 export async function loadSnapshot(): Promise<CrmState | null> {
   try {
-    const r = await fetch('/api/crm/snapshot');
+    const r = await fetch('/api/crm/snapshot', { cache: 'no-store' });
+    if (r.status === 401) {
+      signalUnauthorized();
+      return null;
+    }
     if (!r.ok) return null;
     const j = await r.json();
     return j.data ?? null;
@@ -13,11 +18,13 @@ export async function loadSnapshot(): Promise<CrmState | null> {
 
 export async function saveSnapshot(data: CrmState): Promise<void> {
   try {
-    await fetch('/api/crm/snapshot', {
+    const r = await fetch('/api/crm/snapshot', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ data }),
     });
+    // Not logged in: nothing was saved; local data stays untouched until login.
+    if (r.status === 401) signalUnauthorized();
   } catch {
     /* ignore */
   }

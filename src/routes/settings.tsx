@@ -7,6 +7,7 @@ import { cn } from '@/lib/cn';
 import { copyText } from '@/lib/copy';
 import { saveSnapshot } from '@/lib/crm-snapshot';
 import { toast } from 'sonner';
+import { AccountCard } from '@/components/AccountCard';
 
 export function SettingsPage() {
   const settings = useCrm((s) => s.settings);
@@ -295,6 +296,8 @@ export function SettingsPage() {
         <button type="button" onClick={save} className="touch-btn w-full rounded-xl bg-accent text-white font-semibold">
           Сохранить
         </button>
+
+        <AccountCard />
 
         <div className="bg-white rounded-2xl p-4 shadow-sm text-sm text-gray-600 space-y-2">
           <div className="font-medium text-gray-900">Установка на телефон (PWA)</div>
