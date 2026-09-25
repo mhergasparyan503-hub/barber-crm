@@ -3,8 +3,23 @@ import { createServer as createViteServer } from 'vite';
 import { Hono } from 'hono';
 import { getMe, setWebhook, deleteWebhook, sendMessage } from './telegram-api';
 import { loadCrmSnapshot, saveCrmSnapshot } from './db';
-import { pollAndHandle, handleUpdate, processDueReminders } from './telegram-inbox';
+import {
+  pollAndHandle,
+  handleUpdate,
+  processDueReminders,
+  computeSlots,
+  notifyOwner,
+  findClientsByPhone,
+  staffIdOf,
+} from './telegram-inbox';
 import { claimUpdateId } from './tg-dedup';
+import { withCrmLock, mergeIncoming, stampChanges, publicView } from './crm-merge';
+import { buildReminders, mskWallISO } from '../src/lib/msk';
+import { normalizePhone, phoneLast10 } from '../src/lib/phone';
+import fs from 'fs';
+import path from 'path';
+
+const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -40,42 +55,102 @@ async function main() {
   app.get('/api/health', (c) => c.json({ ok: true }));
 
   app.get('/api/crm/snapshot', async (c) => {
-    const data = await loadCrmSnapshot();
+    const data = (await loadCrmSnapshot()) as any;
+    if (data?.settings) {
+      // Never expose the bot token or bot drafts over HTTP.
+      const { telegramToken: _t, _draft: _d, ...settings } = data.settings;
+      void _t;
+      void _d;
+      return c.json({ data: { ...data, settings: { ...settings, telegramToken: '' } } });
+    }
     return c.json({ data });
   });
 
   app.post('/api/crm/snapshot', async (c) => {
-    const body = await c.req.json();
-    const incoming = body.data;
-    // Never let a stale browser localStorage flush rewind telegramOffset
-    // (that makes getUpdates skip /start updates the server already advanced past).
-    try {
-      const prev = (await loadCrmSnapshot()) as any;
-      if (prev?.settings && incoming?.settings) {
-        const prevOff = Number(prev.settings.telegramOffset || 0);
-        // Browser flushes must NEVER advance (or re-poison) telegramOffset —
-        // only webhook/poll handlers may move it forward.
-        incoming.settings.telegramOffset = prevOff;
-        // Prefer non-empty server token if client sends empty (don't wipe)
-        if (!incoming.settings.telegramToken && prev.settings.telegramToken) {
-          incoming.settings.telegramToken = prev.settings.telegramToken;
-        }
-        if (!incoming.settings.telegramOwnerChatId && prev.settings.telegramOwnerChatId) {
-          incoming.settings.telegramOwnerChatId = prev.settings.telegramOwnerChatId;
-        }
-      }
-      // Never let a partial/empty browser flush wipe the work schedule the bot reads.
-      if ((!incoming.schedules || !incoming.schedules.length) && prev?.schedules?.length) {
-        incoming.schedules = prev.schedules;
-      }
-      if ((!incoming.staff || !incoming.staff.length) && prev?.staff?.length) {
-        incoming.staff = prev.staff;
-      }
-    } catch {
-      /* */
+    const body = await c.req.json().catch(() => null);
+    const incoming = body?.data;
+    if (!incoming || typeof incoming !== 'object' || !incoming.settings) {
+      return c.json({ ok: false, error: 'bad snapshot' }, 400);
     }
-    await saveCrmSnapshot(incoming);
+    await withCrmLock(async () => {
+      const prev = (await loadCrmSnapshot()) as any;
+      // Merge instead of overwrite: keeps bot/online bookings the browser hasn't pulled yet,
+      // bot drafts, sent-reminder flags, bot schedule edits; only tombstoned deletes remove.
+      await saveCrmSnapshot(prev ? mergeIncoming(prev, incoming) : incoming);
+    });
     return c.json({ ok: true });
+  });
+
+  // Public data for /book — no client names/phones, no token.
+  app.get('/api/public/booking', async (c) => {
+    const snap = await loadCrmSnapshot();
+    return c.json({ data: publicView(snap) });
+  });
+
+  // Public online booking — validated and saved on the server (no full-snapshot flush from a visitor's phone).
+  app.post('/api/public/book', async (c) => {
+    const b = (await c.req.json().catch(() => null)) as any;
+    const name = String(b?.name || '').trim().slice(0, 80);
+    const phone = normalizePhone(String(b?.phone || ''));
+    const day = String(b?.day || '');
+    const time = String(b?.time || '');
+    if (!name || phoneLast10(phone).length < 10) return c.json({ ok: false, error: 'Укажите имя и телефон' }, 400);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{2}:\d{2}$/.test(time)) {
+      return c.json({ ok: false, error: 'Неверная дата или время' }, 400);
+    }
+    const result = await withCrmLock(async () => {
+      const snap = (await loadCrmSnapshot()) as any;
+      if (!snap?.settings) return { ok: false, error: 'CRM не настроена' };
+      if (!snap.settings.onlineEnabled) return { ok: false, error: 'Запись по ссылке закрыта' };
+      const svc = (snap.services || []).find((s: any) => s.id === b?.serviceId && s.active !== false);
+      if (!svc) return { ok: false, error: 'Услуга не найдена', code: 'service' };
+      const sid = staffIdOf(snap);
+      if (!computeSlots(snap, sid, day, svc.durationMin).includes(time)) {
+        return { ok: false, error: 'Это время уже заняли. Выберите другое.', code: 'busy' };
+      }
+      const prev = clone(snap);
+      let client = findClientsByPhone(snap, phone).find((x: any) => phoneLast10(x.phone || '') === phoneLast10(phone));
+      if (!client) {
+        client = { id: 'cli_' + Math.random().toString(36).slice(2, 10), name, phone, createdAt: new Date().toISOString() };
+        snap.clients = [...(snap.clients || []), client];
+      } else {
+        client.name = name;
+        client.phone = phone;
+      }
+      const reminderIds: string[] = Array.isArray(b?.reminders) ? b.reminders.map(String).slice(0, 10) : [];
+      const customMins = Number(b?.customMins) > 0 ? Math.min(Number(b.customMins), 60 * 24 * 7) : null;
+      const startISO = mskWallISO(day, time);
+      const reminders = buildReminders(startISO, reminderIds, customMins);
+      const mins = reminders.filter((r) => r.kind !== 'morning').map((r) => Number(String(r.kind).replace(/\D/g, ''))).filter((n) => n > 0);
+      if (mins.length) client.reminderPrefs = [...new Set([...(client.reminderPrefs || []), ...mins])];
+      if (reminderIds.includes('morning')) client.reminderMorning = true;
+      const ap = {
+        id: 'apt_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4),
+        clientId: client.id,
+        staffId: sid,
+        serviceIds: [svc.id],
+        start: startISO,
+        durationMin: svc.durationMin,
+        status: 'waiting',
+        note: 'Онлайн-запись',
+        source: 'online',
+        color: snap.settings.onlineColor,
+        telegramChatId: client.telegramChatId || undefined,
+        reminders,
+        createdAt: new Date().toISOString(),
+      };
+      snap.appointments = [...(snap.appointments || []), ap];
+      stampChanges(prev, snap);
+      await saveCrmSnapshot(snap);
+      const token = snap.settings.telegramToken;
+      if (token) {
+        void notifyOwner(token, snap, ap, client, svc, 'Новая онлайн-запись').catch((e) =>
+          console.error('notify owner (online)', e),
+        );
+      }
+      return { ok: true, id: ap.id };
+    });
+    return c.json(result, result.ok ? 200 : 409);
   });
 
   app.post('/api/telegram/check', async (c) => {
@@ -92,12 +167,14 @@ async function main() {
 
     // Persist token + username into snapshot settings if present
     try {
-      const snap = (await loadCrmSnapshot()) as any;
-      if (snap?.settings) {
-        snap.settings.telegramToken = token.trim();
-        snap.settings.telegramBotUsername = me.result?.username || snap.settings.telegramBotUsername || '';
-        await saveCrmSnapshot(snap);
-      }
+      await withCrmLock(async () => {
+        const snap = (await loadCrmSnapshot()) as any;
+        if (snap?.settings) {
+          snap.settings.telegramToken = token.trim();
+          snap.settings.telegramBotUsername = me.result?.username || snap.settings.telegramBotUsername || '';
+          await saveCrmSnapshot(snap);
+        }
+      });
     } catch {
       /* */
     }
@@ -157,8 +234,26 @@ async function main() {
     return c.json(result);
   });
 
+  // Allow a new master Telegram account to connect via ?start=owner (clears the saved owner chat).
+  app.post('/api/telegram/owner/reset', async (c) => {
+    await withCrmLock(async () => {
+      const snap = (await loadCrmSnapshot()) as any;
+      if (snap?.settings) {
+        snap.settings.telegramOwnerChatId = '';
+        await saveCrmSnapshot(snap);
+      }
+    });
+    return c.json({ ok: true });
+  });
+
   app.post('/api/telegram/send', async (c) => {
-    const { token, chatId, text, reply_markup } = await c.req.json();
+    const body = await c.req.json();
+    const { chatId, text, reply_markup } = body;
+    let token = body.token;
+    if (!token) {
+      const snap = (await loadCrmSnapshot()) as any;
+      token = snap?.settings?.telegramToken;
+    }
     if (!token || !chatId || !text) {
       return c.json({ ok: false, error: 'token, chatId, text required' }, 400);
     }
@@ -182,7 +277,7 @@ async function main() {
     }
 
     // Ack Telegram immediately — avoids retry duplicates while sendMessage runs.
-    void (async () => {
+    void withCrmLock(async () => {
       try {
         const snap = (await loadCrmSnapshot()) as any;
         if (!snap?.settings?.telegramToken) return;
@@ -222,6 +317,7 @@ async function main() {
             telegramOffset: result.offset,
           },
         };
+        stampChanges(snap, next);
         await saveCrmSnapshot(next);
       } catch (e) {
         console.error('tg webhook', e);
@@ -238,17 +334,65 @@ async function main() {
           /* */
         }
       }
-    })();
+    });
 
     return c.json({ ok: true });
   });
 
   const server = createServer();
 
-  const vite = await createViteServer({
-    server: { middlewareMode: true, hmr: { server }, allowedHosts: true },
-    appType: 'spa',
-  });
+  // Production: serve the prebuilt bundle from dist/ (fast on phones, no Vite dep-optimizer
+  // at runtime). Fallback to Vite middleware when dist/ is missing (local dev).
+  const distDir = path.join(process.cwd(), 'dist');
+  const useDist =
+    process.env.NODE_ENV === 'production' &&
+    process.env.SERVE_VITE !== '1' &&
+    fs.existsSync(path.join(distDir, 'index.html'));
+  const vite = useDist
+    ? null
+    : await createViteServer({
+        server: { middlewareMode: true, hmr: { server }, allowedHosts: true },
+        appType: 'spa',
+      });
+  const MIME: Record<string, string> = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.mjs': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json',
+    '.webmanifest': 'application/manifest+json',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.ico': 'image/x-icon',
+    '.webp': 'image/webp',
+    '.txt': 'text/plain; charset=utf-8',
+    '.woff2': 'font/woff2',
+  };
+  const serveDist = (reqUrl: string, res: import('http').ServerResponse) => {
+    const pathname = decodeURIComponent((reqUrl || '/').split('?')[0]);
+    let file = path.normalize(path.join(distDir, pathname));
+    if (!file.startsWith(distDir)) file = path.join(distDir, 'index.html');
+    if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+      // Missing hashed asset (old tab after deploy) → real 404, not HTML-as-JS.
+      if (pathname.startsWith('/assets/')) {
+        res.statusCode = 404;
+        res.end('Not found');
+        return;
+      }
+      file = path.join(distDir, 'index.html');
+    }
+    const ext = path.extname(file).toLowerCase();
+    res.statusCode = 200;
+    res.setHeader('Content-Type', MIME[ext] || 'application/octet-stream');
+    res.setHeader(
+      'Cache-Control',
+      file.includes(`${path.sep}assets${path.sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache',
+    );
+    fs.createReadStream(file).pipe(res);
+  };
+  console.log(useDist ? 'Serving prebuilt dist/' : 'Serving via Vite middleware');
 
   server.on('request', async (req, res) => {
     try {
@@ -271,6 +415,10 @@ async function main() {
         response.headers.forEach((v, k) => res.setHeader(k, v));
         const ab = await response.arrayBuffer();
         res.end(Buffer.from(ab));
+        return;
+      }
+      if (!vite) {
+        serveDist(req.url || '/', res);
         return;
       }
       vite.middlewares(req, res, () => {
@@ -352,8 +500,10 @@ async function main() {
       if (reminderBusy) return;
       reminderBusy = true;
       try {
+        await withCrmLock(async () => {
         const snap = (await loadCrmSnapshot()) as any;
         if (!snap?.settings?.telegramToken) return;
+        const prevSnap = clone(snap);
         const before = JSON.stringify(
           (snap.appointments || []).map((a: any) => (a.reminders || []).map((r: any) => !!r.sent)),
         );
@@ -362,9 +512,11 @@ async function main() {
           (crm.appointments || []).map((a: any) => (a.reminders || []).map((r: any) => !!r.sent)),
         );
         if (sent > 0 || before !== after) {
+          stampChanges(prevSnap, crm);
           await saveCrmSnapshot(crm);
           if (sent > 0) console.log('reminders sent', sent);
         }
+        });
       } catch (e) {
         console.error('reminder tick', e);
       } finally {

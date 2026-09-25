@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useCrm } from "@/lib/store";
 import { useRouterState } from "@tanstack/react-router";
 import { loadSnapshot, scheduleFlush } from "@/lib/crm-snapshot";
+import type { Appointment, Client } from "@/lib/types";
 
 /**
  * Keeps server CRM snapshot in sync (for webhook) and pulls owner chat / offset /
@@ -54,86 +55,133 @@ export function TelegramBridge() {
 
         const remoteClients = remote.clients || [];
         const remoteAppts = remote.appointments || [];
+
+        // Fresh device / cleared browser (empty journal and clients): adopt the server CRM
+        // instead of pushing seed defaults over it.
+        if (
+          !local.clients.length &&
+          !local.appointments.length &&
+          !(local.deletedAppointmentIds || []).length &&
+          !(local.deletedClientIds || []).length &&
+          (remoteClients.length || remoteAppts.length || (remote.services || []).length)
+        ) {
+          useCrm.setState({
+            clients: remoteClients,
+            appointments: remoteAppts,
+            services: remote.services?.length ? remote.services : local.services,
+            staff: remote.staff?.length ? remote.staff : local.staff,
+            windows: remote.windows || [],
+            schedules: remote.schedules?.length ? remote.schedules : local.schedules,
+            exceptions: remote.exceptions || [],
+            exceptionsUpdatedAt: remote.exceptionsUpdatedAt,
+            telegramChats: remote.telegramChats || [],
+            deletedAppointmentIds: [],
+            deletedClientIds: [],
+            settings: {
+              ...local.settings,
+              ...remote.settings,
+              telegramToken: local.settings.telegramToken || '',
+              dataVersion: local.settings.dataVersion,
+            },
+          });
+          return;
+        }
+
+        const newer = (r?: { updatedAt?: string }, l?: { updatedAt?: string }) =>
+          !!r?.updatedAt && (!l?.updatedAt || r.updatedAt > l.updatedAt);
+        const mergeSent = (
+          chosen: Appointment['reminders'],
+          other: Appointment['reminders'],
+        ): Appointment['reminders'] =>
+          chosen?.map((x) =>
+            x.sent || !other?.some((o) => o.sent && o.kind === x.kind && o.at === x.at)
+              ? x
+              : { ...x, sent: true },
+          );
+
         const localClientIds = new Set(local.clients.map((c) => c.id));
         const localApptIds = new Set(local.appointments.map((a) => a.id));
         const tombstones = new Set(local.deletedAppointmentIds || []);
+        const clientTombs = new Set(local.deletedClientIds || []);
         const remoteApptIds = new Set(remoteAppts.map((a) => a.id));
+        const remoteClientIds = new Set(remoteClients.map((c) => c.id));
         // Drop tombstones once the server no longer has the id (flush succeeded).
         const prunedTombstones = [...tombstones].filter((id) => remoteApptIds.has(id));
+        const prunedClientTombs = [...clientTombs].filter((id) => remoteClientIds.has(id));
         const tombstonesChanged =
-          prunedTombstones.length !== tombstones.size ||
-          prunedTombstones.some((id) => !tombstones.has(id));
+          prunedTombstones.length !== tombstones.size || prunedClientTombs.length !== clientTombs.size;
 
-        const newClients = remoteClients.filter((c) => !localClientIds.has(c.id));
-        const linkedUpdates = remoteClients.filter((rc) => {
-          const lc = local.clients.find((c) => c.id === rc.id);
-          return lc && rc.telegramChatId && rc.telegramChatId !== lc.telegramChatId;
-        });
+        const newClients = remoteClients.filter((c) => !localClientIds.has(c.id) && !clientTombs.has(c.id));
+        const remoteClientMap = new Map(remoteClients.map((c) => [c.id, c]));
         // Never resurrect hard-deleted appointments from a stale server snapshot.
         const newAppts = remoteAppts.filter(
           (a) => !localApptIds.has(a.id) && !tombstones.has(a.id),
         );
         const remoteApptMap = new Map(remoteAppts.map((a) => [a.id, a]));
-        const statusMoved = local.appointments.filter((a) => {
+
+        const mergeAppt = (a: Appointment): Appointment => {
           const r = remoteApptMap.get(a.id);
-          if (!r) return false;
-          // Prefer cancelled: local cancel must not be overwritten by stale remote waiting.
-          const nextStatus =
-            a.status === 'cancelled' || r.status === 'cancelled'
-              ? ('cancelled' as const)
-              : r.status;
-          return (
-            nextStatus !== a.status ||
-            r.start !== a.start ||
-            JSON.stringify(r.reminders || []) !== JSON.stringify(a.reminders || [])
-          );
-        });
+          if (!r) return a;
+          if (newer(r, a)) return { ...a, ...r, reminders: mergeSent(r.reminders, a.reminders) };
+          if (a.updatedAt) {
+            return {
+              ...a,
+              reminders: mergeSent(a.reminders, r.reminders),
+              telegramChatId: a.telegramChatId || r.telegramChatId,
+            };
+          }
+          // Legacy rows without timestamps: previous behaviour (cancel wins, remote time/reminders).
+          const status =
+            a.status === 'cancelled' || r.status === 'cancelled' ? ('cancelled' as const) : r.status;
+          return {
+            ...a,
+            status,
+            start: r.start,
+            reminders: r.reminders ?? a.reminders,
+            telegramChatId: r.telegramChatId || a.telegramChatId,
+          };
+        };
+        const mergeClient = (c: Client): Client => {
+          const u = remoteClientMap.get(c.id);
+          if (!u) return c;
+          if (newer(u, c)) return { ...c, ...u };
+          return {
+            ...c,
+            telegramChatId: c.telegramChatId || u.telegramChatId,
+            telegramUsername: c.telegramUsername || u.telegramUsername,
+            reminderPrefs: c.reminderPrefs ?? u.reminderPrefs,
+            name: c.name || u.name,
+            phone: c.phone || u.phone,
+          };
+        };
+        const mergedAppts = local.appointments.map(mergeAppt);
+        const mergedClients = local.clients.map(mergeClient);
+        const apptsChanged = mergedAppts.some((a, i) => a !== local.appointments[i] && JSON.stringify(a) !== JSON.stringify(local.appointments[i]));
+        const clientsChanged = mergedClients.some((c, i) => c !== local.clients[i] && JSON.stringify(c) !== JSON.stringify(local.clients[i]));
+        const exceptionsNewer =
+          !!remote.exceptionsUpdatedAt &&
+          (!local.exceptionsUpdatedAt || remote.exceptionsUpdatedAt > local.exceptionsUpdatedAt);
+        const chatsChanged =
+          JSON.stringify(remote.telegramChats || []) !== JSON.stringify(local.telegramChats || []);
 
         if (
           newClients.length ||
-          linkedUpdates.length ||
           newAppts.length ||
-          statusMoved.length ||
-          remote.telegramChats ||
+          apptsChanged ||
+          clientsChanged ||
+          exceptionsNewer ||
+          (remote.telegramChats && chatsChanged) ||
           tombstonesChanged
         ) {
           useCrm.getState().mergeTelegramPatch({
             deletedAppointmentIds: prunedTombstones,
-            clients: [
-              ...local.clients.map((c) => {
-                const u =
-                  linkedUpdates.find((x) => x.id === c.id) || remoteClients.find((x) => x.id === c.id);
-                if (!u) return c;
-                return {
-                  ...c,
-                  telegramChatId: u.telegramChatId || c.telegramChatId,
-                  telegramUsername: u.telegramUsername || c.telegramUsername,
-                  reminderPrefs: u.reminderPrefs || c.reminderPrefs,
-                  name: c.name || u.name,
-                  phone: c.phone || u.phone,
-                };
-              }),
-              ...newClients,
-            ],
-            appointments: [
-              ...local.appointments.map((a) => {
-                const r = remoteApptMap.get(a.id);
-                if (!r) return a;
-                const status =
-                  a.status === 'cancelled' || r.status === 'cancelled'
-                    ? ('cancelled' as const)
-                    : r.status;
-                return {
-                  ...a,
-                  status,
-                  start: r.start,
-                  reminders: r.reminders ?? a.reminders,
-                  telegramChatId: r.telegramChatId || a.telegramChatId,
-                };
-              }),
-              ...newAppts,
-            ],
+            deletedClientIds: prunedClientTombs,
+            clients: [...mergedClients, ...newClients],
+            appointments: [...mergedAppts, ...newAppts],
             telegramChats: remote.telegramChats || local.telegramChats || [],
+            ...(exceptionsNewer
+              ? { exceptions: remote.exceptions || [], exceptionsUpdatedAt: remote.exceptionsUpdatedAt }
+              : {}),
           });
         }
       } catch {
@@ -154,7 +202,7 @@ export function TelegramBridge() {
           body: JSON.stringify({ token: useCrm.getState().settings.telegramToken || "" }),
         });
         if (!r.ok) return;
-        const j = await r.json();
+        await r.json();
         // Production webhook: never client-poll (getUpdates fights webhook).
         // Preview ALLOW_POLL: server loop owns getUpdates — also skip client poll.
         serverOwnsPoll = true;
@@ -186,8 +234,10 @@ export function TelegramBridge() {
       }
     };
 
-    flush();
-    void pull();
+    // Pull first, then flush — a stale/new browser must not push over newer server data.
+    void pull().finally(() => {
+      if (!dead) flush();
+    });
     void (async () => {
       const tok = useCrm.getState().settings.telegramToken;
       if (tok) await refreshMode();

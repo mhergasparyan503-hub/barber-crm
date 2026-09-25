@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { eachYmd } from './msk';
+import { eachYmd, morningReminderAt, parseApStart } from './msk';
 import type {
   Appointment,
   Client,
@@ -41,6 +41,22 @@ type Actions = {
 export type Store = CrmState & Actions;
 
 const seed = createSeedState();
+const nowIso = () => new Date().toISOString();
+
+/** Keep reminders relative to the visit when its time changes. */
+function shiftReminders(list: Appointment['reminders'], oldStart: string, newStart: string) {
+  if (!list?.length) return list;
+  const delta = parseApStart(newStart).getTime() - parseApStart(oldStart).getTime();
+  if (!Number.isFinite(delta) || delta === 0) return list;
+  const now = Date.now();
+  return list.map((r) => {
+    const at =
+      r.kind === 'morning'
+        ? morningReminderAt(newStart)
+        : new Date(new Date(r.at).getTime() + delta).toISOString();
+    return { ...r, at, sent: new Date(at).getTime() <= now };
+  });
+}
 
 export const useCrm = create<Store>()(
   persist(
@@ -50,19 +66,26 @@ export const useCrm = create<Store>()(
       addClient: (c) => {
         const id = c.id || uid('cli');
         set((s) => ({
-          clients: [...s.clients, { ...c, id, createdAt: new Date().toISOString() }],
+          clients: [...s.clients, { ...c, id, createdAt: nowIso(), updatedAt: nowIso() }],
         }));
         return id;
       },
       updateClient: (id, patch) =>
-        set((s) => ({ clients: s.clients.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
-      deleteClient: (id) =>
         set((s) => ({
-          clients: s.clients.filter((c) => c.id !== id),
-          appointments: s.appointments.filter(
-            (a) => !(a.clientId === id && new Date(a.start) >= new Date()),
-          ),
+          clients: s.clients.map((c) => (c.id === id ? { ...c, ...patch, updatedAt: nowIso() } : c)),
         })),
+      deleteClient: (id) =>
+        set((s) => {
+          const removed = s.appointments
+            .filter((a) => a.clientId === id && parseApStart(a.start) >= new Date())
+            .map((a) => a.id);
+          return {
+            clients: s.clients.filter((c) => c.id !== id),
+            appointments: s.appointments.filter((a) => !removed.includes(a.id)),
+            deletedAppointmentIds: [...(s.deletedAppointmentIds || []), ...removed].slice(-300),
+            deletedClientIds: [...(s.deletedClientIds || []).filter((x) => x !== id), id].slice(-300),
+          };
+        }),
       addService: (svc) =>
         set((s) => ({ services: [...s.services, { ...svc, id: svc.id || uid('svc') }] })),
       updateService: (id, patch) =>
@@ -70,13 +93,22 @@ export const useCrm = create<Store>()(
       deleteService: (id) => set((s) => ({ services: s.services.filter((x) => x.id !== id) })),
       upsertAppointment: (a) =>
         set((s) => {
-          const exists = s.appointments.some((x) => x.id === a.id);
+          const prev = s.appointments.find((x) => x.id === a.id);
           const deletedAppointmentIds = (s.deletedAppointmentIds || []).filter((id) => id !== a.id);
+          let next: Appointment = { ...a, updatedAt: nowIso() };
+          // Moved but reminders untouched → keep them relative to the new time.
+          if (
+            prev &&
+            prev.start !== a.start &&
+            JSON.stringify(prev.reminders || []) === JSON.stringify(a.reminders || [])
+          ) {
+            next = { ...next, reminders: shiftReminders(a.reminders, prev.start, a.start) };
+          }
           return {
             deletedAppointmentIds,
-            appointments: exists
-              ? s.appointments.map((x) => (x.id === a.id ? a : x))
-              : [...s.appointments, a],
+            appointments: prev
+              ? s.appointments.map((x) => (x.id === a.id ? next : x))
+              : [...s.appointments, next],
           };
         }),
       deleteAppointment: (id) =>
@@ -92,7 +124,11 @@ export const useCrm = create<Store>()(
         }),
       moveAppointment: (id, start) =>
         set((s) => ({
-          appointments: s.appointments.map((x) => (x.id === id ? { ...x, start } : x)),
+          appointments: s.appointments.map((x) =>
+            x.id === id
+              ? { ...x, start, reminders: shiftReminders(x.reminders, x.start, start), updatedAt: nowIso() }
+              : x,
+          ),
         })),
       addWindow: (w) =>
         set((s) => ({ windows: [...s.windows, { ...w, id: w.id || uid('win') }] })),
@@ -119,15 +155,25 @@ export const useCrm = create<Store>()(
               ...ex,
             });
           }
-          return { exceptions: next };
+          return { exceptions: next, exceptionsUpdatedAt: nowIso() };
         }),
       clearExceptionsRange: (staffId, from, to) =>
         set((s) => ({
           exceptions: s.exceptions.filter(
             (e) => !(e.staffId === staffId && e.date >= from && e.date <= to),
           ),
+          exceptionsUpdatedAt: nowIso(),
         })),
-      resetJournal: () => set({ appointments: [], windows: [], clients: get().clients }),
+      resetJournal: () =>
+        set((s) => ({
+          appointments: [],
+          windows: [],
+          clients: get().clients,
+          deletedAppointmentIds: [
+            ...(s.deletedAppointmentIds || []),
+            ...s.appointments.map((a) => a.id),
+          ].slice(-1000),
+        })),
       getSnapshot: () => {
         const s = get();
         return {
@@ -136,9 +182,11 @@ export const useCrm = create<Store>()(
           staff: s.staff,
           appointments: s.appointments,
           deletedAppointmentIds: s.deletedAppointmentIds || [],
+          deletedClientIds: s.deletedClientIds || [],
           windows: s.windows,
           schedules: s.schedules,
           exceptions: s.exceptions,
+          exceptionsUpdatedAt: s.exceptionsUpdatedAt,
           telegramChats: s.telegramChats || [],
           settings: s.settings,
         };
@@ -148,6 +196,9 @@ export const useCrm = create<Store>()(
           clients: patch.clients ?? s.clients,
           appointments: patch.appointments ?? s.appointments,
           deletedAppointmentIds: patch.deletedAppointmentIds ?? s.deletedAppointmentIds,
+          deletedClientIds: patch.deletedClientIds ?? s.deletedClientIds,
+          exceptions: patch.exceptions ?? s.exceptions,
+          exceptionsUpdatedAt: patch.exceptionsUpdatedAt ?? s.exceptionsUpdatedAt,
           telegramChats: patch.telegramChats ?? s.telegramChats,
           settings: patch.settings ? { ...s.settings, ...patch.settings } : s.settings,
         })),
@@ -162,9 +213,11 @@ export const useCrm = create<Store>()(
         staff: s.staff,
         appointments: s.appointments,
         deletedAppointmentIds: s.deletedAppointmentIds || [],
+        deletedClientIds: s.deletedClientIds || [],
         windows: s.windows,
         schedules: s.schedules,
         exceptions: s.exceptions,
+        exceptionsUpdatedAt: s.exceptionsUpdatedAt,
         telegramChats: s.telegramChats || [],
         settings: s.settings,
       }),

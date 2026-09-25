@@ -262,7 +262,26 @@ export function SettingsPage() {
                   </button>
                 </div>
                 {form.telegramOwnerChatId ? (
-                  <div className="text-xs text-emerald-700">Мастер подключён (chat id сохранён)</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs text-emerald-700">Мастер подключён (chat id сохранён)</div>
+                    <button
+                      type="button"
+                      className="text-xs text-gray-500 underline shrink-0"
+                      onClick={async () => {
+                        if (!confirm('Отключить текущий Telegram мастера? Потом нажмите «Подключить мой Telegram» с нужного аккаунта.')) return;
+                        try {
+                          await fetch('/api/telegram/owner/reset', { method: 'POST' });
+                          setForm((f) => ({ ...f, telegramOwnerChatId: '' }));
+                          replaceSettings({ telegramOwnerChatId: '' });
+                          toast.success('Мастер отключён — подключите Telegram заново');
+                        } catch {
+                          toast.error('Нет связи с сервером');
+                        }
+                      }}
+                    >
+                      Переподключить мастера
+                    </button>
+                  </div>
                 ) : (
                   <div className="text-xs text-amber-700">
                     Откройте «Подключить мой Telegram» и нажмите Start в боте (?start=owner).

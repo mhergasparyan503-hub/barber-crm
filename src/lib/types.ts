@@ -30,6 +30,8 @@ export interface Client {
   reminderPrefs?: number[];
   reminderMorning?: boolean;
   createdAt: string;
+  /** Last change (ISO) — used to merge web and bot edits. */
+  updatedAt?: string;
 }
 
 export interface Appointment {
@@ -48,6 +50,8 @@ export interface Appointment {
   telegramChatId?: string;
   reminders?: { at: string; sent?: boolean; kind: string }[];
   createdAt: string;
+  /** Last change (ISO) — used to merge web and bot edits. */
+  updatedAt?: string;
 }
 
 export interface TimeWindow {
@@ -118,6 +122,10 @@ export interface CrmState {
   appointments: Appointment[];
   /** Hard-deleted ids — blocks TelegramBridge pull from resurrecting until server flush drops them. */
   deletedAppointmentIds?: string[];
+  /** Deleted client ids — tells the server merge not to keep them. */
+  deletedClientIds?: string[];
+  /** Last change of exceptions (day schedule) — bot can edit them too. */
+  exceptionsUpdatedAt?: string;
   windows: TimeWindow[];
   schedules: StaffSchedule[];
   exceptions: ScheduleException[];

@@ -195,7 +195,7 @@ function phoneLast10(raw: string): string {
   return d.slice(-10);
 }
 
-function findClientsByPhone(crm: Crm, raw: string) {
+export function findClientsByPhone(crm: Crm, raw: string) {
   const needle = phoneLast10(raw);
   if (needle.length < 7) return [];
   return (crm.clients || []).filter((c) => phoneLast10(c.phone || '').endsWith(needle) || phoneLast10(c.phone || '') === needle);
@@ -526,7 +526,7 @@ function cloneCrm(crm: Crm): Crm {
   };
 }
 
-function staffIdOf(crm: Crm): string {
+export function staffIdOf(crm: Crm): string {
   const active = (crm.staff || []).find((s: any) => s.active !== false);
   return active?.id || crm.staff?.[0]?.id || 'staff_barber';
 }
@@ -839,6 +839,18 @@ async function handleMessage(token: string, msg: any, crm: Crm) {
     const rawPayload = text.split(/\s+/)[1] || '';
     const payload = rawPayload.trim().toLowerCase();
     const ownerId = String(crm.settings.telegramOwnerChatId || '');
+    if (payload === 'owner' && ownerId && ownerId !== chatId) {
+      // Owner already connected — don't let anyone with the link take over the master menu.
+      console.warn('tg /start owner refused for chat', chatId, '(owner already set)');
+      await sendClientMenu(token, chatId, crm);
+      await sendMessage(
+        token,
+        ownerId,
+        `⚠️ Кто-то открыл ссылку подключения мастера (${username ? '@' + username : 'chat ' + chatId}). Доступ не выдан.
+Если это вы с нового аккаунта — в CRM: Настройки → «Переподключить мастера».`,
+      );
+      return;
+    }
     if (payload === 'owner') {
       crm.settings.telegramOwnerChatId = chatId;
       await sendOwnerMenu(
@@ -1175,9 +1187,10 @@ async function handleClientMenuText(
     setDraft(crm, chatId, {
       serviceId: nearest.serviceIds?.[0],
       ignoreId: nearest.id.slice(-10),
+      dur: nearest.durationMin,
     });
     const ym = mskParts(new Date()).date.slice(0, 7);
-    await sendMonthCalendar(token, chatId, ym, crm);
+    await sendMonthCalendar(token, chatId, ym, crm, nearest.durationMin || 45);
     return true;
   }
   if (menuEq(text, MENU_CANCEL)) {
@@ -1284,7 +1297,7 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
   }
   if (data.startsWith('bk:sv:')) {
     const serviceId = data.slice(6);
-    setDraft(crm, chatId, { ...(getDraft(crm, chatId) || {}), serviceId, ignoreId: undefined });
+    setDraft(crm, chatId, { ...(getDraft(crm, chatId) || {}), serviceId, ignoreId: undefined, dur: undefined, ownerMove: undefined, apId: undefined });
     const now = new Date();
     const ym = `${mskParts(now).date.slice(0, 7)}`;
     const svc0 = crm.services.find((s) => s.id === serviceId);
@@ -1294,7 +1307,7 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
   if (data.startsWith('bk:mo:')) {
     const draft = getDraft(crm, chatId);
     const svcMo = crm.services.find((s) => s.id === draft.serviceId);
-    await sendMonthCalendar(token, chatId, data.slice(6), crm, svcMo?.durationMin || 45);
+    await sendMonthCalendar(token, chatId, data.slice(6), crm, draft.dur || svcMo?.durationMin || 45);
     return;
   }
   if (data.startsWith('bk:dy:')) {
@@ -1304,7 +1317,7 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
     setDraft(crm, chatId, draft);
     const svc = crm.services.find((s) => s.id === draft.serviceId);
     const sid = staffIdOf(crm);
-    const slots = computeSlots(crm, sid, day, svc?.durationMin || 45, draft.ignoreId);
+    const slots = computeSlots(crm, sid, day, draft.dur || svc?.durationMin || 45, draft.ignoreId);
     const rows: any[] = [];
     for (let i = 0; i < slots.length; i += 3) {
       rows.push(slots.slice(i, i + 3).map((t) => btn(t, `bk:tm:${t.replace(':', '')}`)));
@@ -1312,7 +1325,7 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
     if (!rows.length) {
       const today = mskDateKey(new Date());
       const horizon = Number(crm.settings?.horizonDays ?? 14);
-      const maxDay = mskDateKey(new Date(Date.now() + horizon * 24 * 3600 * 1000));
+      const maxDay = mskDateKey(new Date(Date.now() + Math.max(0, horizon - 1) * 24 * 3600 * 1000));
       let why = 'нет свободных слотов';
       if (day < today) why = 'день уже прошёл';
       else if (day > maxDay) why = `вне горизонта записи (${horizon} дн.)`;
@@ -1335,9 +1348,22 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
     const hm = data.slice(6);
     const time = hm.slice(0, 2) + ':' + hm.slice(2);
     const draft = getDraft(crm, chatId);
+    const svc = crm.services.find((s) => s.id === draft.serviceId);
+    // Stale button (old message / slot taken meanwhile) — don't accept a busy or past time.
+    if (
+      !draft.day ||
+      !computeSlots(crm, staffIdOf(crm), draft.day, draft.dur || svc?.durationMin || 45, draft.ignoreId).includes(time)
+    ) {
+      await sendMessage(
+        token,
+        chatId,
+        draft.day ? `Время ${time} уже занято или недоступно. Выберите другое.` : 'Черновик записи устарел. Начните снова.',
+        kb([[btn(draft.day ? '🕐 Другое время' : '📅 Записаться', draft.day ? `bk:dy:${draft.day}` : 'bk:go')]]),
+      );
+      return;
+    }
     draft.time = time;
     setDraft(crm, chatId, draft);
-    const svc = crm.services.find((s) => s.id === draft.serviceId);
 
     // Owner reschedule path: apply immediately
     if (draft.ownerMove && draft.ignoreId) {
@@ -1435,10 +1461,11 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
     setDraft(crm, chatId, {
       serviceId: ap.serviceIds?.[0],
       ignoreId: ap.id.slice(-10),
+      dur: ap.durationMin,
     });
     const now = new Date();
     const ym = mskParts(now).date.slice(0, 7);
-    await sendMonthCalendar(token, chatId, ym, crm);
+    await sendMonthCalendar(token, chatId, ym, crm, ap.durationMin || 45);
     return;
   }
   if (data === 'bk:rm' || data === 'bk:rm:') {
@@ -1625,10 +1652,11 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
       ignoreId: ap.id.slice(-10),
       ownerMove: true,
       apId: ap.id,
+      dur: ap.durationMin,
     });
     const now = new Date();
     const ym = mskParts(now).date.slice(0, 7);
-    await sendMonthCalendar(token, chatId, ym, crm);
+    await sendMonthCalendar(token, chatId, ym, crm, ap.durationMin || 45);
     return;
   }
   if (data.startsWith('ow:msg:')) {
@@ -1652,10 +1680,12 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
   if (data.startsWith('ok:v_')) {
     const id = data.slice(5);
     const ap = crm.appointments.find((a) => a.id === id || a.id.endsWith(id));
-    if (ap) {
-      // Mobile statuses: waiting | cancelled (no "confirmed")
-      ap.status = 'waiting';
+    if (ap?.status === 'cancelled') {
+      await sendMessage(token, chatId, 'Эта запись уже отменена. Записаться заново можно через меню.', kb([[btn('📋 Меню', 'bk:menu')]]));
+    } else if (ap) {
       await sendMessage(token, chatId, 'Спасибо, ждём вас!');
+    } else {
+      await sendMessage(token, chatId, 'Запись не найдена.', kb([[btn('📋 Меню', 'bk:menu')]]));
     }
     return;
   }
@@ -1676,8 +1706,20 @@ async function applyReschedule(token: string, chatId: string, crm: Crm, from?: a
     return;
   }
   const svc = crm.services.find((s) => s.id === draft.serviceId || ap.serviceIds?.includes(s.id));
+  if (!computeSlots(crm, ap.staffId || staffIdOf(crm), draft.day, ap.durationMin || svc?.durationMin || 45, String(ap.id).slice(-10)).includes(draft.time)) {
+    await sendMessage(
+      token,
+      chatId,
+      `Время ${draft.time} (${draft.day}) уже занято или недоступно. Начните перенос заново и выберите другое время.`,
+      isOwnerChat(crm, chatId) ? ownerReplyKeyboard() : kb([[btn('📋 Меню', 'bk:menu')]]),
+    );
+    setDraft(crm, chatId, {});
+    return;
+  }
+  const oldStart = apStart(ap);
   ap.start = mskWallISO(draft.day, draft.time);
   ap.status = 'waiting';
+  ap.reminders = shiftReminders(ap.reminders, oldStart, ap.start);
   // Never overwrite visit telegramChatId with owner chat
   const client = crm.clients.find((c) => c.id === ap.clientId);
   await notifyOwner(token, crm, ap, client || { name: 'Клиент', phone: '' }, svc, 'Перенос записи');
@@ -1706,6 +1748,20 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
   const svc = crm.services.find((s) => s.id === draft.serviceId);
   const sid = staffIdOf(crm);
   const ownerMode = !!draft.ownerBook || isOwnerChat(crm, chatId);
+  // Re-check at confirm time: the slot may have been taken meanwhile (web journal, /book, another client).
+  if (!computeSlots(crm, sid, draft.day, svc?.durationMin || 45).includes(draft.time)) {
+    const d = { ...draft };
+    delete d.time;
+    delete d.await;
+    setDraft(crm, chatId, d);
+    await sendMessage(
+      token,
+      chatId,
+      `Время ${draft.time} (${draft.day}) уже занято или недоступно. Выберите другое время.`,
+      kb([[btn('🕐 Другое время', `bk:dy:${draft.day}`)], [btn('« 📋 Меню', ownerMode ? 'ow:menu' : 'bk:menu')]]),
+    );
+    return;
+  }
 
   let client: any;
   if (ownerMode) {
@@ -1879,7 +1935,7 @@ function hmToMin(hm: string): number {
   return h * 60 + m;
 }
 
-function computeSlots(crm: Crm, staffId: string, day: string, durationMin: number, ignoreSuffix?: string) {
+export function computeSlots(crm: Crm, staffId: string, day: string, durationMin: number, ignoreSuffix?: string) {
   // Align with web getDayPlan: MSK calendar dow + custom override or week template.
   const dow = mskDow(day);
   const now = new Date();
@@ -1887,7 +1943,8 @@ function computeSlots(crm: Crm, staffId: string, day: string, durationMin: numbe
   if (day < today) return []; // past Moscow days
   const horizon = Number(crm.settings?.horizonDays ?? 14);
   if (Number.isFinite(horizon) && horizon >= 0) {
-    const maxDay = mskDateKey(new Date(now.getTime() + horizon * 24 * 3600 * 1000));
+    // Same as web availableDays: today … today + (horizon-1)
+    const maxDay = mskDateKey(new Date(now.getTime() + Math.max(0, horizon - 1) * 24 * 3600 * 1000));
     if (day > maxDay) return [];
   }
   const ex = crm.exceptions?.find((e) => e.staffId === staffId && e.date === day);
@@ -1912,7 +1969,7 @@ function computeSlots(crm: Crm, staffId: string, day: string, durationMin: numbe
     breakEnd = week.breakEnd;
   }
   const step = crm.settings?.slotMinutes || 15;
-  const lead = crm.settings?.leadMinutes || 30;
+  const lead = Number(crm.settings?.leadMinutes ?? 30);
   const slots: string[] = [];
   let cur = hmToMin(start);
   const endM = hmToMin(end);
@@ -1964,7 +2021,7 @@ function computeSlots(crm: Crm, staffId: string, day: string, durationMin: numbe
   return slots;
 }
 
-async function notifyOwner(token: string, crm: Crm, ap: any, client: any, svc: any, title: string) {
+export async function notifyOwner(token: string, crm: Crm, ap: any, client: any, svc: any, title: string) {
   const owner = crm.settings.telegramOwnerChatId;
   if (!owner) return;
   const sid = ap.id.slice(-10);
@@ -2072,6 +2129,8 @@ export async function processDueReminders(crm: Crm, send = sendMessage): Promise
         );
         if (res && res.ok === false) {
           console.error('reminder send fail', res.description || res);
+          // Permanent errors (bot blocked, chat not found) — don't retry every 15 s forever.
+          if (res.error_code === 403 || res.error_code === 400) r.sent = true;
         } else {
           r.sent = true;
           sent++;
@@ -2082,4 +2141,18 @@ export async function processDueReminders(crm: Crm, send = sendMessage): Promise
     }
   }
   return { sent, crm };
+}
+
+/** Keep reminders relative to the visit after a reschedule. */
+export function shiftReminders(list: any[] | undefined, oldStart: string, newStart: string): any[] | undefined {
+  if (!list?.length) return list;
+  const delta = parseApStart(newStart).getTime() - parseApStart(oldStart).getTime();
+  if (!Number.isFinite(delta) || delta === 0) return list;
+  const now = Date.now();
+  return list.map((r) => {
+    const at = r.kind === 'morning'
+      ? morningReminderAt(newStart)
+      : new Date(new Date(r.at).getTime() + delta).toISOString();
+    return { ...r, at, sent: new Date(at).getTime() <= now };
+  });
 }

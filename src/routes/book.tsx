@@ -2,24 +2,32 @@ import { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useCrm } from '@/lib/store';
-import { STAFF_ID, uid } from '@/lib/seed';
+import { STAFF_ID } from '@/lib/seed';
 import { availableDays, freeSlots } from '@/lib/slots';
 import { normalizePhone, phoneLast10 } from '@/lib/phone';
 import { cn } from '@/lib/cn';
-import { notifyOwnerNewVisit } from '@/lib/telegram-notify';
-import { loadSnapshot, scheduleFlush } from '@/lib/crm-snapshot';
-import {
-  REMINDER_PRESETS,
-  buildReminders,
-  mskDayNoon,
-  mskWallISO,
-} from '@/lib/msk';
+import type { CrmState } from '@/lib/types';
+import { REMINDER_PRESETS, mskDayNoon } from '@/lib/msk';
+
+/** Public booking data (no client list, no secrets) — never written into the local CRM store. */
+async function loadPublic(): Promise<CrmState | null> {
+  try {
+    const r = await fetch('/api/public/booking', { cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j.data ?? null;
+  } catch {
+    return null;
+  }
+}
 
 type Step = 'service' | 'day' | 'slot' | 'form' | 'remind' | 'done';
 
 export function BookPage() {
-  const state = useCrm();
+  const [pub, setPub] = useState<CrmState | null>(null);
+  const state = pub || useCrm.getState().getSnapshot();
   const settings = state.settings;
+  const [submitting, setSubmitting] = useState(false);
   const [step, setStep] = useState<Step>('service');
   const [serviceId, setServiceId] = useState('');
   const [day, setDay] = useState('');
@@ -33,34 +41,13 @@ export function BookPage() {
 
   const [bootstrapping, setBootstrapping] = useState(true);
 
-  // Always prefer server CRM snapshot on /book so stale localStorage cannot
-  // hide services (e.g. only 3 leftover onlineServiceIds).
+  // Always use the server's public booking data on /book (visitor phones have no CRM data).
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const remote = await loadSnapshot();
-        if (cancelled || !remote) return;
-        const cur = useCrm.getState();
-        useCrm.setState({
-          services: remote.services?.length ? remote.services : cur.services,
-          staff: remote.staff?.length ? remote.staff : cur.staff,
-          appointments: remote.appointments || [],
-          windows: remote.windows || [],
-          schedules: remote.schedules?.length ? remote.schedules : cur.schedules,
-          exceptions: remote.exceptions || [],
-          settings: {
-            ...cur.settings,
-            ...(remote.settings || {}),
-            // keep any local-only secrets out of the public page if empty remote
-            telegramToken: cur.settings.telegramToken || remote.settings?.telegramToken || '',
-          },
-        });
-      } catch {
-        /* ignore — fall back to local/seed */
-      } finally {
-        if (!cancelled) setBootstrapping(false);
-      }
+      const remote = await loadPublic();
+      if (!cancelled && remote) setPub(remote);
+      if (!cancelled) setBootstrapping(false);
     })();
     return () => {
       cancelled = true;
@@ -74,17 +61,19 @@ export function BookPage() {
     return s.online !== false;
   });
   const service = onlineServices.find((s) => s.id === serviceId);
-  const snap = state.getSnapshot();
+  const staffId = state.staff?.find((s) => s.active !== false)?.id || STAFF_ID;
 
   const days = useMemo(() => {
     if (!service) return [];
-    return availableDays(snap, STAFF_ID, service.durationMin);
-  }, [serviceId, state.appointments, state.windows, state.exceptions, state.schedules, settings.horizonDays]);
+    return availableDays(state, staffId, service.durationMin);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [service, pub, staffId]);
 
   const slots = useMemo(() => {
     if (!service || !day) return [];
-    return freeSlots({ state: snap, staffId: STAFF_ID, day, durationMin: service.durationMin });
-  }, [serviceId, day, state.appointments, state.windows]);
+    return freeSlots({ state, staffId, day, durationMin: service.durationMin });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [service, day, pub, staffId]);
 
   const botUsername = (settings.telegramBotUsername || '').replace(/^@/, '');
   const botUrl = botUsername ? `https://t.me/${botUsername}` : '';
@@ -137,7 +126,8 @@ export function BookPage() {
     );
   }
 
-  function submit(skipReminders: boolean) {
+  async function submit(skipReminders: boolean) {
+    if (submitting) return;
     setError('');
     const nPhone = normalizePhone(phone);
     if (!name.trim() || phoneLast10(nPhone).length < 10) {
@@ -152,58 +142,38 @@ export function BookPage() {
       return;
     }
 
-    let clientId = state.clients.find((c) => phoneLast10(c.phone) === phoneLast10(nPhone))?.id;
-    if (!clientId) clientId = state.addClient({ name: name.trim(), phone: nPhone });
-    else state.updateClient(clientId, { name: name.trim(), phone: nPhone });
-
-    const startISO = mskWallISO(day, slot);
-    const reminders = skipReminders
-      ? []
-      : buildReminders(startISO, selectedReminders, customMins);
-
-    // Remember prefs like the Telegram bot
-    if (!skipReminders) {
-      const minsPrefs = REMINDER_PRESETS.filter(
-        (p) => selectedReminders.includes(p.id) && p.mins != null,
-      ).map((p) => p.mins!);
-      if (customMins) minsPrefs.push(customMins);
-      const patch: { reminderPrefs?: number[]; reminderMorning?: boolean } = {};
-      if (minsPrefs.length) {
-        const existing = state.clients.find((c) => c.id === clientId)?.reminderPrefs || [];
-        patch.reminderPrefs = [...new Set([...existing, ...minsPrefs])];
+    setSubmitting(true);
+    try {
+      const r = await fetch('/api/public/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serviceId: service.id,
+          day,
+          time: slot,
+          name: name.trim(),
+          phone: nPhone,
+          reminders: skipReminders ? [] : selectedReminders,
+          customMins: customMins ?? undefined,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) {
+        if (j.code === 'busy') {
+          const fresh = await loadPublic();
+          if (fresh) setPub(fresh);
+          setSlot('');
+          setStep('slot');
+        }
+        setError(j.error || 'Не удалось записаться. Попробуйте ещё раз.');
+        return;
       }
-      if (selectedReminders.includes('morning')) {
-        patch.reminderMorning = true;
-      }
-      if (Object.keys(patch).length) state.updateClient(clientId, patch);
+      setStep('done');
+    } catch {
+      setError('Нет связи. Проверьте интернет и попробуйте ещё раз.');
+    } finally {
+      setSubmitting(false);
     }
-
-    const aptId = uid('apt');
-    state.upsertAppointment({
-      id: aptId,
-      clientId,
-      staffId: STAFF_ID,
-      serviceIds: [service.id],
-      start: startISO,
-      durationMin: service.durationMin,
-      status: 'waiting',
-      note: 'Онлайн-запись',
-      source: 'online',
-      color: settings.onlineColor,
-      reminders,
-      createdAt: new Date().toISOString(),
-    });
-    scheduleFlush(() => state.getSnapshot());
-    notifyOwnerNewVisit(state.getSnapshot(), {
-      appointmentId: aptId,
-      clientName: name.trim(),
-      clientPhone: nPhone,
-      serviceNames: service.name,
-      startISO,
-      durationMin: service.durationMin,
-      source: 'online',
-    });
-    setStep('done');
   }
 
   return (
@@ -247,7 +217,7 @@ export function BookPage() {
                 <button
                   key={d}
                   type="button"
-                  className="rounded-xl border border-gray-200 p-3 text-sm capitalize"
+                  className="rounded-xl border border-gray-200 p-3 text-sm first-letter:uppercase"
                   onClick={() => {
                     setDay(d);
                     setStep('slot');
@@ -267,6 +237,7 @@ export function BookPage() {
               ← День
             </button>
             <h2 className="font-semibold mb-3">Время</h2>
+            {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
             <div className="flex flex-wrap gap-2">
               {slots.map((t) => (
                 <button
@@ -275,6 +246,7 @@ export function BookPage() {
                   className="px-4 py-2.5 rounded-xl border border-gray-200 text-sm font-medium"
                   onClick={() => {
                     setSlot(t);
+                    setError('');
                     setStep('form');
                   }}
                 >
@@ -291,7 +263,7 @@ export function BookPage() {
             <button type="button" className="text-sm text-accent" onClick={() => setStep('slot')}>
               ← Время
             </button>
-            <p className="text-sm text-gray-600 capitalize">
+            <p className="text-sm text-gray-600 first-letter:uppercase">
               {service?.name} · {day && format(mskDayNoon(day), 'd MMMM', { locale: ru })} в {slot}
             </p>
             <input
@@ -335,7 +307,7 @@ export function BookPage() {
                 rel="noopener noreferrer"
                 className="inline-flex items-center justify-center w-full touch-btn rounded-xl bg-[#229ED9] text-white font-semibold text-sm"
               >
-                Открыть бота{botUsername ? ` @{botUsername}` : ''}
+                Открыть бота{botUsername ? ` @${botUsername}` : ''}
               </a>
             ) : (
               <p className="text-xs text-gray-400">
@@ -383,17 +355,18 @@ export function BookPage() {
             {error && <p className="text-sm text-red-600">{error}</p>}
             <button
               type="button"
-              onClick={() => submit(false)}
-              disabled={!selectedReminders.length && !(showCustom && customText.trim())}
+              onClick={() => void submit(false)}
+              disabled={submitting || (!selectedReminders.length && !(showCustom && customText.trim()))}
               className="touch-btn w-full rounded-xl bg-accent text-white font-semibold disabled:opacity-40"
             >
-              Записаться
-              {(selectedReminders.length > 0 || (showCustom && customText.trim())) &&
+              {submitting ? 'Записываем…' : 'Записаться'}
+              {!submitting && (selectedReminders.length > 0 || (showCustom && customText.trim())) &&
                 ` · ${selectedReminders.length + (showCustom && customText.trim() ? 1 : 0)} нап.`}
             </button>
             <button
               type="button"
-              onClick={() => submit(true)}
+              onClick={() => void submit(true)}
+              disabled={submitting}
               className="touch-btn w-full rounded-xl border border-gray-200 text-gray-700 font-medium"
             >
               Без напоминания
@@ -410,11 +383,12 @@ export function BookPage() {
             />
             <div className="text-4xl mb-3">✓</div>
             <h2 className="text-xl font-bold mb-2">Вы записаны</h2>
-            <p className="text-gray-600 capitalize mb-6">
-              {service?.name}
-              <br />
-              {day && format(mskDayNoon(day), 'EEEE, d MMMM', { locale: ru })} в {slot}
-            </p>
+            <div className="text-gray-600 mb-6">
+              <div>{service?.name}</div>
+              <div className="first-letter:uppercase">
+                {day && format(mskDayNoon(day), 'EEEE, d MMMM', { locale: ru })} в {slot}
+              </div>
+            </div>
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-left space-y-3">
               <p className="text-sm text-gray-700">
                 Напоминания и управление записью — в Telegram-боте.
@@ -426,7 +400,7 @@ export function BookPage() {
                   rel="noopener noreferrer"
                   className="inline-flex items-center justify-center w-full touch-btn rounded-xl bg-[#229ED9] text-white font-semibold"
                 >
-                  Открыть бота{botUsername ? ` @{botUsername}` : ''}
+                  Открыть бота{botUsername ? ` @${botUsername}` : ''}
                 </a>
               ) : null}
             </div>

@@ -74,7 +74,7 @@ export function ClientDetailPage() {
           <ul className="space-y-2">
             {hist.map((a) => (
               <li key={a.id} className="text-sm border-b border-gray-50 pb-2">
-                <div className="font-medium capitalize">{formatVisitWhen(a.start).full}</div>
+                <div className="font-medium first-letter:uppercase">{formatVisitWhen(a.start).full}</div>
                 <div className="text-gray-500">
                   {a.serviceIds.map((sid) => services.find((s) => s.id === sid)?.name).filter(Boolean).join(', ')}
                   {a.status === 'cancelled' ? ' · отмена' : ''}

@@ -13,6 +13,8 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
+      // No offline cache: avoids phones sticking to an old version after deploys.
+      selfDestroying: true,
       includeAssets: ['favicon.svg'],
       manifest: {
         name: 'Барбер CRM',

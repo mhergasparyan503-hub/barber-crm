@@ -2,6 +2,15 @@ process.env.TG_SMOKE_CAPTURE = '1';
 const { handleUpdate, processDueReminders } = await import('./telegram-inbox.ts');
 const { mskWallISO, morningReminderAt, reminderAtBefore, mskParts, parseApStart } = await import('./msk.ts');
 
+// Dynamic test days: next Monday (≥2 days ahead) … Thursday, Moscow calendar.
+const __base = (() => {
+  const now = new Date(Date.now() + 3 * 3600e3);
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 2));
+  while (d.getUTCDay() !== 1) d.setUTCDate(d.getUTCDate() + 1);
+  return d;
+})();
+const __day = (n) => new Date(__base.getTime() + n * 864e5).toISOString().slice(0, 10);
+const D0 = __day(0), D1 = __day(1), D2 = __day(2), D3 = __day(3);
 const g = globalThis;
 g.__tgSent = [];
 
@@ -130,7 +139,7 @@ r = await handleUpdate(crm, {
   update_id: 6,
   callback_query: {
     id: 'cq2',
-    data: 'bk:dy:2026-09-21',
+    data: `bk:dy:${D0}`,
     from: { first_name: 'Иван' },
     message: { chat: { id: 111 } },
   },
@@ -211,24 +220,24 @@ r = await handleUpdate(crm, {
   update_id: 51,
   callback_query: {
     id: 'ow1',
-    data: 'ow:sy:2026-09-22',
+    data: `ow:sy:${D1}`,
     from: { username: 'boss' },
     message: { chat: { id: 999 } },
   },
 });
 Object.assign(crm, r.patch);
-assert(last().text.includes('2026-09-22'), 'ask kind for day');
+assert(last().text.includes(D1), 'ask kind for day');
 r = await handleUpdate(crm, {
   update_id: 52,
   callback_query: {
     id: 'ow2',
-    data: 'ow:sk:off:2026-09-22',
+    data: `ow:sk:off:${D1}`,
     from: { username: 'boss' },
     message: { chat: { id: 999 } },
   },
 });
 Object.assign(crm, r.patch);
-assert(crm.exceptions.some((e) => e.date === '2026-09-22' && e.type === 'off'), 'exception off saved');
+assert(crm.exceptions.some((e) => e.date === D1 && e.type === 'off'), 'exception off saved');
 assert(last().reply_markup?.keyboard, 'owner kb after sched');
 console.log('OK owner schedule off');
 
@@ -397,7 +406,7 @@ r = await handleUpdate(crm, {
   update_id: 562,
   callback_query: {
     id: 'owb2',
-    data: 'bk:dy:2026-09-23',
+    data: `bk:dy:${D2}`,
     from: { username: 'boss' },
     message: { chat: { id: 999 } },
   },
@@ -467,7 +476,7 @@ r = await handleUpdate(crm, {
 Object.assign(crm, r.patch);
 r = await handleUpdate(crm, {
   update_id: 569,
-  callback_query: { id: 'owb6', data: 'bk:dy:2026-09-24', from: { username: 'boss' }, message: { chat: { id: 999 } } },
+  callback_query: { id: 'owb6', data: `bk:dy:${D3}`, from: { username: 'boss' }, message: { chat: { id: 999 } } },
 });
 Object.assign(crm, r.patch);
 const owSlots2 = last();
@@ -528,7 +537,7 @@ assert(ap.reminders[0].sent === true, 'marked sent');
 console.log('OK processDueReminders');
 
 // 8) msk morning
-const morn = morningReminderAt(mskWallISO('2026-09-21', '15:30'));
+const morn = morningReminderAt(mskWallISO(D0, '15:30'));
 assert(morn.includes('T06:00:00.000Z') || new Date(morn).toISOString().includes('06:00'), '09:00 MSK = 06:00Z ' + morn);
 console.log('OK morningReminderAt', morn);
 
@@ -573,7 +582,7 @@ g.__tgSent = [];
 }
 
 crm.appointments[0].status = 'waiting';
-crm.appointments[0].start = mskWallISO('2026-09-23', '11:00');
+crm.appointments[0].start = mskWallISO(D2, '11:00');
 
 // 10) reminder presets + prefs
 g.__tgSent = [];
@@ -689,7 +698,7 @@ Object.assign(crm, r.patch);
   Object.assign(crm, r.patch);
   r = await handleUpdate(crm, {
     update_id: 143,
-    callback_query: { id: 'n2', data: 'bk:dy:2026-09-24', from: { first_name: 'Пётр' }, message: { chat: { id: 444 } } },
+    callback_query: { id: 'n2', data: `bk:dy:${D3}`, from: { first_name: 'Пётр' }, message: { chat: { id: 444 } } },
   });
   Object.assign(crm, r.patch);
   const slotBtn2 = last().reply_markup.inline_keyboard.flat().find((b) => b.callback_data?.startsWith('bk:tm:'));
@@ -727,7 +736,7 @@ console.log('\nALL SMOKE PASSED');
 
 // 11) MENU_BOOK_MORE label is «Новая запись» when upcoming exists
 {
-  const day = mskParts(new Date(Date.now() + 2 * 86400000)).date;
+  const day = D0; // working Monday (closed days are now rejected at confirm)
   crm.clients = [{
     id: 'cli_ret', name: 'Регуляр', phone: '+79991112233', telegramChatId: '555',
   }];

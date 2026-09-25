@@ -341,6 +341,8 @@ export function BookingSheet({
     }
 
     const base: Appointment = {
+      // Keep reminders / Telegram link / creation info of an existing visit (bot, online).
+      ...(appt || {}),
       id: appt?.id || uid('apt'),
       clientId,
       staffId: STAFF_ID,
@@ -350,7 +352,7 @@ export function BookingSheet({
       status: 'waiting',
       note: comment || undefined,
       source: appt?.source || 'journal',
-      color: state.settings.visitColor,
+      color: appt?.color || state.settings.visitColor,
       createdAt: appt?.createdAt || new Date().toISOString(),
     };
     const isNew = !appt && mode!.kind !== 'move';
