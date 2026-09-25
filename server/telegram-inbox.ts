@@ -161,18 +161,26 @@ function parseOwnerDate(text: string): string | null {
 
 function parseHoursRange(text: string): { start: string; end: string; breakStart?: string; breakEnd?: string } | null {
   const t = text.trim().toLowerCase().replace(/[–—]/g, '-');
-  const main = t.match(/(\d{1,2}):?(\d{2})\s*-\s*(\d{1,2}):?(\d{2})/);
+  // "10:00-17:00", "10-17", "1000-1700", "10.00-17.30"
+  const R = /(\d{1,2})(?:[:.]?(\d{2}))?\s*-\s*(\d{1,2})(?:[:.]?(\d{2}))?/;
+  const fmt = (h: string, m?: string) => {
+    const hh = Number(h);
+    const mm = Number(m || '0');
+    if (hh > 24 || mm > 59 || (hh === 24 && mm > 0)) return null;
+    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  };
+  const brIdx = t.search(/перерыв|break/);
+  const mainPart = brIdx >= 0 ? t.slice(0, brIdx) : t;
+  const main = mainPart.match(R);
   if (!main) return null;
-  const start = `${main[1].padStart(2, '0')}:${main[2]}`;
-  const end = `${main[3].padStart(2, '0')}:${main[4]}`;
-  const br = t.match(/(?:перерыв|break)\s*(\d{1,2}):?(\d{2})\s*-\s*(\d{1,2}):?(\d{2})/);
-  if (br) {
-    return {
-      start,
-      end,
-      breakStart: `${br[1].padStart(2, '0')}:${br[2]}`,
-      breakEnd: `${br[3].padStart(2, '0')}:${br[4]}`,
-    };
+  const start = fmt(main[1], main[2]);
+  const end = fmt(main[3], main[4]);
+  if (!start || !end) return null;
+  if (brIdx >= 0) {
+    const br = t.slice(brIdx).match(R);
+    const bs = br && fmt(br[1], br[2]);
+    const be = br && fmt(br[3], br[4]);
+    if (bs && be) return { start, end, breakStart: bs, breakEnd: be };
   }
   return { start, end };
 }
@@ -979,11 +987,15 @@ async function handleMessage(token: string, msg: any, crm: Crm) {
     }
     if (od.await === 'ow_sched_hours' && text && !text.startsWith('/')) {
       const hours = parseHoursRange(text);
+      if (hours && hours.start >= hours.end) {
+        await sendMessage(token, chatId, `Конец работы должен быть позже начала (${hours.start}-${hours.end}). Пример: 10:00-17:00`);
+        return;
+      }
       if (!hours) {
         await sendMessage(
           token,
           chatId,
-          'Формат: 10:00-21:00 или 10:00-21:00 перерыв 13:00-14:00',
+          'Формат: 10:00-17:00 (или просто 10-17), можно с перерывом: 10:00-21:00 перерыв 13:00-14:00',
         );
         return;
       }

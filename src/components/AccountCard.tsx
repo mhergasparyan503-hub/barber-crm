@@ -33,7 +33,7 @@ export function AccountCard() {
   async function changePassword() {
     setError('');
     if (!current) return setError('Введите текущий пароль');
-    if (next.trim().length < 8) return setError('Новый пароль — минимум 8 символов');
+    if (next.trim().length < 6) return setError('Новый пароль — минимум 6 символов');
     if (next.trim() !== next2.trim()) return setError('Новые пароли не совпадают');
     setBusy(true);
     const r = await authPost('change-password', { current, password: next });
@@ -91,23 +91,26 @@ export function AccountCard() {
       {open && (
         <div className="space-y-2">
           <label className="block text-xs text-gray-500">
-            Текущий пароль
+            Текущий пароль (тот, с которым входите по email)
             <PasswordInput className={inputCls} autoComplete="current-password" value={current} onChange={setCurrent} />
           </label>
-          {error && <p className="text-sm text-red-600">{error}</p>}
           {open === 'password' ? (
             <>
               <label className="block text-xs text-gray-500">
-                Новый пароль (минимум 8 символов)
+                Новый пароль (минимум 6 символов)
                 <PasswordInput className={inputCls} autoComplete="new-password" value={next} onChange={setNext} />
               </label>
               <label className="block text-xs text-gray-500">
                 Повторите новый пароль
                 <PasswordInput className={inputCls} autoComplete="new-password" value={next2} onChange={setNext2} />
               </label>
+              {error && <p className="text-sm text-red-600 font-medium">{error}</p>}
               <button type="button" disabled={busy} onClick={changePassword} className="touch-btn w-full rounded-xl bg-accent text-white font-semibold disabled:opacity-60">
-                Сохранить пароль
+                {busy ? 'Сохраняю…' : 'Сохранить пароль'}
               </button>
+              <p className="text-xs text-gray-400">
+                Не помните текущий пароль? Нажмите «Выйти из аккаунта», затем на экране входа «Забыли пароль?» — код придёт в Telegram.
+              </p>
             </>
           ) : (
             <>
@@ -115,6 +118,7 @@ export function AccountCard() {
                 Новый email
                 <input className={inputCls} type="email" inputMode="email" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
               </label>
+              {error && <p className="text-sm text-red-600 font-medium">{error}</p>}
               <button type="button" disabled={busy} onClick={changeEmail} className="touch-btn w-full rounded-xl bg-accent text-white font-semibold disabled:opacity-60">
                 Сохранить email
               </button>

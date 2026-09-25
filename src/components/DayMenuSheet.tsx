@@ -220,7 +220,7 @@ export function DayMenuSheet({
               </p>
             )}
             <button type="button" className="touch-btn w-full rounded-xl bg-accent text-white font-semibold" onClick={saveHours}>
-              {confirmHours && outside > 0 ? 'Всё равно сохранить' : 'Сохранить время'}
+              {confirmHours && outside > 0 ? 'Всё равно сохранить' : `Сохранить ${start}–${end}`}
             </button>
           </>
         )}

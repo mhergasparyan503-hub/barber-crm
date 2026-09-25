@@ -92,7 +92,11 @@ export function WheelPicker({
         aria-label={ariaLabel}
         tabIndex={0}
         onScroll={onScroll}
-        onTouchEnd={settle}
+        onTouchEnd={() => {
+          // Momentum scroll may continue after the finger lifts — settle once it stops.
+          if (settleTimer.current) window.clearTimeout(settleTimer.current);
+          settleTimer.current = window.setTimeout(settle, 250);
+        }}
         className="no-scrollbar h-[120px] overflow-y-auto overscroll-contain snap-y snap-mandatory"
         style={{
           paddingTop: WHEEL_ITEM_H,
@@ -111,7 +115,13 @@ export function WheelPicker({
                 'flex snap-center items-center justify-center text-base tabular-nums transition-colors',
                 active ? 'font-semibold text-gray-900' : 'font-normal text-gray-400',
               )}
-              style={{ height: WHEEL_ITEM_H }}
+              style={{ height: WHEEL_ITEM_H, cursor: 'pointer' }}
+              onClick={() => {
+                const el = ref.current;
+                const idx = options.findIndex((x) => x.value === o.value);
+                if (el && idx >= 0) el.scrollTo({ top: idx * WHEEL_ITEM_H, behavior: 'smooth' });
+                if (o.value !== valueRef.current) onChangeRef.current(o.value);
+              }}
             >
               {o.label}
             </div>

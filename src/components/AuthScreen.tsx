@@ -55,7 +55,7 @@ export function AuthScreen({
     if (mode !== 'forgot' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       return setError('Введите email');
     }
-    if (password.trim().length < 8) return setError('Пароль — минимум 8 символов');
+    if (password.trim().length < 6) return setError('Пароль — минимум 6 символов');
     if (mode !== 'login' && password !== password2) return setError('Пароли не совпадают');
     if (mode !== 'login' && !/^\d{6}$/.test(code.trim())) return setError('Введите 6-значный код из Telegram');
     setBusy(true);
@@ -140,7 +140,7 @@ export function AuthScreen({
           )}
           <label className="block">
             <span className="text-xs text-gray-500 mb-1 block">
-              {mode === 'login' ? 'Пароль' : 'Новый пароль (минимум 8 символов)'}
+              {mode === 'login' ? 'Пароль' : 'Новый пароль (минимум 6 символов)'}
             </span>
             <PasswordInput
               className={inputCls}

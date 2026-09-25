@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { CalendarClock, Scissors, Settings, Link2, LogOut } from 'lucide-react';
 import { logout } from '@/lib/auth';
+import { authPost } from '@/lib/server-auth';
 import { toast } from 'sonner';
 
 const links = [
@@ -43,14 +44,16 @@ export function MorePage() {
       </button>
       <button
         type="button"
-        onClick={() => {
+        onClick={async () => {
+          if (!confirm('Выйти из аккаунта на этом устройстве?')) return;
+          await authPost('logout');
           logout();
           window.location.href = '/';
         }}
         className="w-full flex items-center gap-3 bg-white rounded-2xl px-4 py-3.5 shadow-sm border border-gray-100 text-red-600"
       >
         <LogOut className="h-5 w-5" />
-        <span className="font-medium">Выйти (PIN)</span>
+        <span className="font-medium">Выйти из аккаунта</span>
       </button>
     </div>
   );

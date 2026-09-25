@@ -64,7 +64,7 @@ function verifyPassword(pw: string, stored: string): boolean {
 
 export const normEmail = (e: unknown) => String(e || '').trim().toLowerCase();
 export const emailOk = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e.length <= 120;
-export const passwordOk = (p: unknown) => typeof p === 'string' && p.trim().length >= 8 && p.length <= 200;
+export const passwordOk = (p: unknown) => typeof p === 'string' && p.trim().length >= 6 && p.length <= 200;
 /** New passwords are stored without stray spaces at the ends (phone keyboards add them). */
 export const cleanPassword = (p: unknown) => String(p || '').trim();
 

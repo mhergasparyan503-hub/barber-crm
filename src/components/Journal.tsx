@@ -342,7 +342,7 @@ export function Journal({
             нет в графике
           </div>
         ) : (
-          <div className="relative mx-2 my-2" style={{ height: heightPx }}>
+          <div className="relative mx-2 mt-2 mb-6" style={{ height: heightPx }}>
             {/* hour lines + slots */}
             {Array.from({ length: slotsCount }).map((_, i) => {
               const minOffset = i * SLOT_MIN;
@@ -371,6 +371,14 @@ export function Journal({
                 </div>
               );
             })}
+
+            {/* end-of-day boundary: show the closing time (e.g. 17:00) */}
+            <div className="absolute left-0 right-0 pointer-events-none" style={{ top: heightPx }}>
+              <div className="absolute left-0 top-0 w-10 -translate-y-1/2 text-[10px] text-gray-500 font-medium tabular-nums">
+                {format(gridEnd, 'HH:mm')}
+              </div>
+              <div className="absolute left-10 right-0 top-0 border-t-2 border-gray-400" />
+            </div>
 
             {/* break band */}
             {plan.breakStart && plan.breakEnd && (

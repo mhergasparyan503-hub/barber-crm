@@ -3,6 +3,7 @@ import { MoreVertical } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
 import { useCrm } from '@/lib/store';
 import { logout } from '@/lib/auth';
+import { authPost } from '@/lib/server-auth';
 import { toast } from 'sonner';
 
 export function AppHeader({ title }: { title?: string }) {
@@ -36,7 +37,9 @@ export function AppHeader({ title }: { title?: string }) {
     setOpen(false);
   }
 
-  function doLogout() {
+  async function doLogout() {
+    if (!confirm('Выйти из аккаунта на этом устройстве?')) return;
+    await authPost('logout');
     logout();
     setOpen(false);
     window.location.href = '/';
@@ -66,7 +69,7 @@ export function AppHeader({ title }: { title?: string }) {
                 { label: 'Настройки', action: () => nav({ to: '/settings' }) },
                 { label: 'Скопировать ссылку записи', action: copyBook },
                 { label: 'Сбросить журнал', action: doReset },
-                { label: 'Выйти (PIN)', action: doLogout },
+                { label: 'Выйти из аккаунта', action: doLogout },
               ].map((m) => (
                 <button
                   key={m.label}

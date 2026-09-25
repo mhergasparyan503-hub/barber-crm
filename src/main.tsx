@@ -7,10 +7,10 @@ import {
   createRoute,
   Outlet,
 } from '@tanstack/react-router';
-import { Toaster } from 'sonner';
+import { Toaster, toast } from 'sonner';
 import { PhoneShell } from '@/components/PhoneShell';
 import { PinGate } from '@/components/PinGate';
-import { isSessionOpen } from '@/lib/auth';
+import { isSessionOpen, hasLock } from '@/lib/auth';
 import { authStatus, UNAUTHORIZED_EVENT, type AuthStatus } from '@/lib/server-auth';
 import { AuthScreen } from '@/components/AuthScreen';
 import { JournalPage } from '@/routes/index';
@@ -25,8 +25,36 @@ import { MorePage } from '@/routes/more';
 import { TelegramBridge } from '@/components/TelegramBridge';
 import '@/styles/app.css';
 
+// Auto-update: when the app comes back to the screen (tab restored from memory),
+// check whether a newer build is deployed and reload once to pick it up.
+function currentBundle(): string {
+  const el = document.querySelector('script[type="module"][src*="/assets/"]') as HTMLScriptElement | null;
+  return el ? new URL(el.src, location.href).pathname : '';
+}
+let updateChecking = false;
+async function checkForUpdate() {
+  if (updateChecking || location.pathname.startsWith('/book')) return;
+  updateChecking = true;
+  try {
+    const html = await (await fetch('/', { cache: 'no-store' })).text();
+    const m = html.match(/src="(\/assets\/index-[^"]+\.js)"/);
+    const mine = currentBundle();
+    if (m && mine && m[1] !== mine) location.reload();
+  } catch {
+    /* offline — ignore */
+  } finally {
+    updateChecking = false;
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void checkForUpdate();
+});
+window.addEventListener('pageshow', (e) => {
+  if ((e as PageTransitionEvent).persisted) void checkForUpdate();
+});
+
 function AuthGate({ children }: { children: React.ReactNode }) {
-  // 1) server session (email + password)  2) local PIN quick unlock
+  // server session (email + password); PIN only as offline fallback
   const [server, setServer] = useState<AuthStatus | 'loading' | 'offline'>('loading');
   const [authed, setAuthed] = useState(false);
 
@@ -39,7 +67,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     setAuthed(isSessionOpen());
     void refresh();
     // Any 401 from sync → show login again (local data is kept).
-    const onUnauth = () => void refresh();
+    const onUnauth = () => {
+      toast.error('Сессия истекла, войдите снова', { id: 'sess-expired' });
+      void refresh();
+    };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauth);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauth);
   }, []);
@@ -66,7 +97,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!authed) {
+  // Server session (cookie, 90 days) is the login. The old local PIN is only
+  // asked when the server is unreachable and a PIN was set up earlier.
+  if (server === 'offline' && hasLock() && !authed) {
     return <PinGate onUnlock={() => setAuthed(true)} />;
   }
 

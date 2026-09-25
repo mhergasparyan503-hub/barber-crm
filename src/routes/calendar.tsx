@@ -110,8 +110,8 @@ export function CalendarPage() {
               )}
             >
               {inMonth && custom && ex?.start && ex?.end && (
-                <span className="absolute top-0.5 text-[8px] leading-none text-amber-700">
-                  {ex.start.replace(/:00$/, '')}–{ex.end.replace(/:00$/, '')}
+                <span className="absolute top-0.5 text-[8px] leading-none tracking-tighter whitespace-nowrap text-amber-700">
+                  {ex.start}–{ex.end}
                 </span>
               )}
               <span className={cn(inMonth && off && ex && 'line-through')}>{format(d, 'd')}</span>

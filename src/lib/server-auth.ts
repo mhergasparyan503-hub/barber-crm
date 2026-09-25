@@ -28,6 +28,10 @@ export async function authPost(
       body: JSON.stringify(body),
     });
     const j = await r.json().catch(() => ({}));
+    if (r.status === 401 && !['login', 'register', 'code', 'reset-code', 'reset'].includes(path)) {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+      return { ...j, ok: false, error: 'Сессия истекла, войдите снова' };
+    }
     if (!r.ok || !j.ok) return { ...j, ok: false, error: j.error || `Ошибка ${r.status}` };
     return j;
   } catch {

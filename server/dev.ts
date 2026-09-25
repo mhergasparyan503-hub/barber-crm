@@ -147,7 +147,7 @@ async function main() {
     const b = (await c.req.json().catch(() => ({}))) as any;
     const email = auth.normEmail(b?.email);
     if (!auth.emailOk(email)) return c.json({ ok: false, error: 'Неверный email' }, 400);
-    if (!auth.passwordOk(b?.password)) return c.json({ ok: false, error: 'Пароль — минимум 8 символов' }, 400);
+    if (!auth.passwordOk(b?.password)) return c.json({ ok: false, error: 'Пароль — минимум 6 символов' }, 400);
     const r = auth.checkCode('register', b?.code);
     if (r !== 'ok') {
       return c.json({ ok: false, error: r === 'bad' ? 'Неверный код' : 'Код устарел — запросите новый' }, 400);
@@ -186,7 +186,7 @@ async function main() {
   app.post('/api/auth/reset', async (c) => {
     if (!auth.hasAccount()) return c.json({ ok: false, error: 'Аккаунт ещё не создан' }, 400);
     const b = (await c.req.json().catch(() => ({}))) as any;
-    if (!auth.passwordOk(b?.password)) return c.json({ ok: false, error: 'Пароль — минимум 8 символов' }, 400);
+    if (!auth.passwordOk(b?.password)) return c.json({ ok: false, error: 'Пароль — минимум 6 символов' }, 400);
     const r = auth.checkCode('reset', b?.code);
     if (r !== 'ok') {
       return c.json({ ok: false, error: r === 'bad' ? 'Неверный код' : 'Код устарел — запросите новый' }, 400);
@@ -210,7 +210,7 @@ async function main() {
       console.warn('[auth] wrong current password on change', n);
       return c.json({ ok: false, code: 'current', error: `Неверный текущий пароль (попытка ${n} из 5)` }, 400);
     }
-    if (!auth.passwordOk(b?.password)) return c.json({ ok: false, error: 'Новый пароль — минимум 8 символов' }, 400);
+    if (!auth.passwordOk(b?.password)) return c.json({ ok: false, error: 'Новый пароль — минимум 6 символов' }, 400);
     auth.setPassword(auth.cleanPassword(b.password));
     auth.destroyOtherSessions(sessToken(c) || undefined);
     void tellMaster('🔐 CRM: пароль изменён. Другие входы завершены.');
