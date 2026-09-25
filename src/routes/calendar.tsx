@@ -98,7 +98,7 @@ export function CalendarPage() {
               data-day={key}
               {...longPress(
                 () => setMenuDay(key),
-                () => nav({ to: '/', search: { day: key } }),
+                () => setMenuDay(key),
               )}
               className={cn(
                 'aspect-square rounded-xl flex flex-col items-center justify-center text-sm relative select-none',
@@ -127,9 +127,15 @@ export function CalendarPage() {
           <span className="inline-block h-3 w-3 rounded bg-amber-50 border border-amber-200 ml-3" /> своё время
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent ml-3" /> есть записи
         </div>
-        <p>Нажмите и удерживайте дату, чтобы сделать её выходным или изменить время работы.</p>
+        <p>Нажмите на дату: открыть журнал, сделать выходным или изменить время работы.</p>
       </div>
-      {menuDay && <DayMenuSheet dayKey={menuDay} onClose={() => setMenuDay(null)} />}
+      {menuDay && (
+        <DayMenuSheet
+          dayKey={menuDay}
+          onClose={() => setMenuDay(null)}
+          onOpenJournal={() => nav({ to: '/', search: { day: menuDay } })}
+        />
+      )}
     </div>
   );
 }

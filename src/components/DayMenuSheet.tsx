@@ -26,7 +26,16 @@ export function recordsWord(n: number) {
 }
 
 /** Bottom sheet for one date: day off / custom hours / back to the weekly template. */
-export function DayMenuSheet({ dayKey, onClose }: { dayKey: string; onClose: () => void }) {
+export function DayMenuSheet({
+  dayKey,
+  onClose,
+  onOpenJournal,
+}: {
+  dayKey: string;
+  onClose: () => void;
+  /** Calendar tab: first item «Открыть журнал». */
+  onOpenJournal?: () => void;
+}) {
   const state = useCrm();
   const schedule = state.schedules.find((s) => s.staffId === STAFF_ID);
   const ex = state.exceptions.find((e) => e.staffId === STAFF_ID && e.date === dayKey);
@@ -120,6 +129,19 @@ export function DayMenuSheet({ dayKey, onClose }: { dayKey: string; onClose: () 
           </div>
         </div>
 
+        {onOpenJournal && view === 'menu' && (
+          <button
+            type="button"
+            className="touch-btn w-full rounded-xl bg-accent text-white font-semibold"
+            onClick={() => {
+              onClose();
+              onOpenJournal();
+            }}
+          >
+            📖 Открыть журнал
+          </button>
+        )}
+
         {past && <p className="text-sm text-gray-500">Прошедший день — график менять не нужно.</p>}
 
         {!past && view === 'menu' && (
@@ -144,7 +166,7 @@ export function DayMenuSheet({ dayKey, onClose }: { dayKey: string; onClose: () 
             ) : (
               <button
                 type="button"
-                className="touch-btn w-full rounded-xl bg-accent text-white font-semibold"
+                className="touch-btn w-full rounded-xl border border-emerald-300 text-emerald-700 font-semibold"
                 onClick={() => setView('hours')}
               >
                 Сделать рабочим

@@ -215,12 +215,17 @@ export function Journal({
   }
 
   // strip swipe ±7 days without accidental day tap
+  const stripMoved = useRef(false);
   function onStripTouchStart(e: React.TouchEvent) {
     stripSwipe.current = { x: e.touches[0].clientX, moved: false };
+    stripMoved.current = false;
   }
   function onStripTouchMove(e: React.TouchEvent) {
     if (!stripSwipe.current) return;
-    if (Math.abs(e.touches[0].clientX - stripSwipe.current.x) > 12) stripSwipe.current.moved = true;
+    if (Math.abs(e.touches[0].clientX - stripSwipe.current.x) > 12) {
+      stripSwipe.current.moved = true;
+      stripMoved.current = true;
+    }
   }
   function onStripTouchEnd(e: React.TouchEvent) {
     const sw = stripSwipe.current;
@@ -233,7 +238,16 @@ export function Journal({
   }
 
   function onDayTap(d: Date) {
-    if (stripSwipe.current?.moved) return;
+    // click fires after touchend — use the flag that survives it
+    if (stripSwipe.current?.moved || stripMoved.current) {
+      stripMoved.current = false;
+      return;
+    }
+    // Tap on the already selected day → day menu (выходной / время работы).
+    if (mskDateKey(d) === dayKey) {
+      setMenuDay(dayKey);
+      return;
+    }
     onDayChange(d);
   }
 
@@ -302,8 +316,16 @@ export function Journal({
             );
           })}
         </div>
-        <div className="text-center text-[10px] text-gray-400 mt-1 capitalize">
-          {format(day, 'LLLL yyyy', { locale: ru })}
+        <div className="relative mt-1 flex items-center justify-center">
+          <span className="text-[10px] text-gray-400 capitalize">{format(day, 'LLLL yyyy', { locale: ru })}</span>
+          <button
+            type="button"
+            onClick={() => setMenuDay(dayKey)}
+            className="absolute right-0 rounded-full border border-gray-200 px-2 py-0.5 text-[11px] text-gray-600 active:bg-gray-100"
+            aria-label="Настройки дня"
+          >
+            ⚙️ День
+          </button>
         </div>
       </div>
 

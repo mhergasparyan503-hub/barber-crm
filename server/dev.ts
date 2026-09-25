@@ -287,8 +287,13 @@ async function main() {
       const svc = (snap.services || []).find((s: any) => s.id === b?.serviceId && s.active !== false);
       if (!svc) return { ok: false, error: 'Услуга не найдена', code: 'service' };
       const sid = staffIdOf(snap);
-      if (!computeSlots(snap, sid, day, svc.durationMin).includes(time)) {
-        return { ok: false, error: 'Это время уже заняли. Выберите другое.', code: 'busy' };
+      const daySlots = computeSlots(snap, sid, day, svc.durationMin);
+      if (!daySlots.includes(time)) {
+        return {
+          ok: false,
+          error: daySlots.length ? 'Это время уже заняли. Выберите другое.' : 'На этот день запись закрыта. Выберите другой день.',
+          code: 'busy',
+        };
       }
       const prev = clone(snap);
       let client = findClientsByPhone(snap, phone).find((x: any) => phoneLast10(x.phone || '') === phoneLast10(phone));
