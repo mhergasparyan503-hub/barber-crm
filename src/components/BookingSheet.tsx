@@ -7,6 +7,7 @@ import { useCrm } from '@/lib/store';
 import { STAFF_ID, uid } from '@/lib/seed';
 import { phoneLast10, normalizePhone, telHref, smsHref } from '@/lib/phone';
 import { hasConflict } from '@/lib/slots';
+import { getDayPlan } from '@/lib/schedule';
 import { formatVisitWhen } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import type { Appointment } from '@/lib/types';
@@ -93,7 +94,7 @@ export function BookingSheet({
       setPhone('');
       setName('');
       setServiceIds([]);
-      setStartLocal(toLocalInput(mode.start));
+      setStartLocal(toLocalInput(sensibleStart(mode.start)));
       setComment('');
       setShowComment(false);
       setDurationMin(30);
@@ -699,6 +700,7 @@ function DurationWheels({
           <div className="text-xs text-gray-500 text-center mb-1">Часы</div>
           <WheelPicker
             options={DUR_HOUR_OPTIONS}
+            loop
             value={hours}
             onChange={onHoursChange}
             aria-label="Часы длительности"
@@ -708,6 +710,7 @@ function DurationWheels({
           <div className="text-xs text-gray-500 text-center mb-1">Минуты</div>
           <WheelPicker
             options={DUR_MINUTE_OPTIONS}
+            loop
             value={minutes}
             onChange={onMinutesChange}
             aria-label="Минуты длительности"
@@ -762,6 +765,7 @@ function DateTimeWheels({
           <div className="text-xs text-gray-500 text-center mb-1">Часы</div>
           <WheelPicker
             options={HOUR_OPTIONS}
+            loop
             value={hour}
             onChange={onHourChange}
             aria-label="Часы"
@@ -771,6 +775,7 @@ function DateTimeWheels({
           <div className="text-xs text-gray-500 text-center mb-1">Мин</div>
           <WheelPicker
             options={MINUTE_OPTIONS}
+            loop
             value={minute}
             onChange={onMinuteChange}
             aria-label="Минуты"
@@ -783,6 +788,28 @@ function DateTimeWheels({
       </p>
     </div>
   );
+}
+
+/**
+ * «+» passes the raw current time (e.g. 21:59) — not on the wheel grid.
+ * Pick the next sensible start: next 10-min step within today's hours,
+ * else the start of the next working day. Slot taps (already on grid) are kept.
+ */
+function sensibleStart(from: Date): Date {
+  if (from.getMinutes() % MINUTE_STEP === 0 && from.getSeconds() === 0) return from;
+  const st = useCrm.getState();
+  const schedule = st.schedules.find((x) => x.staffId === STAFF_ID);
+  const up = new Date(from);
+  up.setSeconds(0, 0);
+  up.setMinutes(Math.ceil((up.getMinutes() + 1) / MINUTE_STEP) * MINUTE_STEP);
+  for (let i = 0; i < 31; i++) {
+    const day = addDays(from, i);
+    const plan = getDayPlan(schedule, st.exceptions, STAFF_ID, day);
+    if (!plan.working || !plan.start || !plan.end) continue;
+    const cand = i === 0 && up > plan.start ? up : plan.start;
+    if (cand < plan.end) return cand;
+  }
+  return up;
 }
 
 function toLocalInput(d: Date) {

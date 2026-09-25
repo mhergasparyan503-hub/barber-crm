@@ -199,15 +199,15 @@ export function DayMenuSheet({
               <div>
                 <div className="text-xs text-gray-500 text-center mb-1">Начало</div>
                 <div className="flex gap-1">
-                  <WheelPicker options={HOURS} value={sH} onChange={(v) => { setSH(v); setConfirmHours(false); }} aria-label="Начало, часы" className="flex-1" />
-                  <WheelPicker options={MINS} value={sM} onChange={(v) => { setSM(v); setConfirmHours(false); }} aria-label="Начало, минуты" className="flex-1" />
+                  <WheelPicker loop options={HOURS} value={sH} onChange={(v) => { setSH(v); setConfirmHours(false); }} aria-label="Начало, часы" className="flex-1" />
+                  <WheelPicker loop options={MINS} value={sM} onChange={(v) => { setSM(v); setConfirmHours(false); }} aria-label="Начало, минуты" className="flex-1" />
                 </div>
               </div>
               <div>
                 <div className="text-xs text-gray-500 text-center mb-1">Конец</div>
                 <div className="flex gap-1">
-                  <WheelPicker options={HOURS} value={eH} onChange={(v) => { setEH(v); setConfirmHours(false); }} aria-label="Конец, часы" className="flex-1" />
-                  <WheelPicker options={MINS} value={eM} onChange={(v) => { setEM(v); setConfirmHours(false); }} aria-label="Конец, минуты" className="flex-1" />
+                  <WheelPicker loop options={HOURS} value={eH} onChange={(v) => { setEH(v); setConfirmHours(false); }} aria-label="Конец, часы" className="flex-1" />
+                  <WheelPicker loop options={MINS} value={eM} onChange={(v) => { setEM(v); setConfirmHours(false); }} aria-label="Конец, минуты" className="flex-1" />
                 </div>
               </div>
             </div>
