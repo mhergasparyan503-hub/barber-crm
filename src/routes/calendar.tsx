@@ -15,10 +15,18 @@ import { useCrm } from '@/lib/store';
 import { WEEKDAY_SHORT } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { mskDateKey, parseApStart } from '@/lib/msk';
+import { STAFF_ID } from '@/lib/seed';
+import { getDayPlan } from '@/lib/schedule';
+import { useLongPress } from '@/lib/useLongPress';
+import { DayMenuSheet } from '@/components/DayMenuSheet';
 
 export function CalendarPage() {
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
   const appointments = useCrm((s) => s.appointments);
+  const schedules = useCrm((s) => s.schedules);
+  const exceptions = useCrm((s) => s.exceptions);
+  const [menuDay, setMenuDay] = useState<string | null>(null);
+  const longPress = useLongPress();
   const nav = useNavigate();
   const swipe = useRef<{ x: number } | null>(null);
 
@@ -74,24 +82,54 @@ export function CalendarPage() {
           const inMonth = isSameMonth(d, cursor);
           const today = key === mskDateKey(new Date());
           const busy = busyDays.has(key);
+          const plan = getDayPlan(
+            schedules.find((x) => x.staffId === STAFF_ID),
+            exceptions,
+            STAFF_ID,
+            key,
+          );
+          const ex = exceptions.find((e) => e.staffId === STAFF_ID && e.date === key);
+          const off = !plan.working;
+          const custom = !!ex && plan.working;
           return (
             <button
               key={key}
               type="button"
-              onClick={() => nav({ to: '/', search: { day: key } })}
+              data-day={key}
+              {...longPress(
+                () => setMenuDay(key),
+                () => nav({ to: '/', search: { day: key } }),
+              )}
               className={cn(
-                'aspect-square rounded-xl flex flex-col items-center justify-center text-sm relative',
+                'aspect-square rounded-xl flex flex-col items-center justify-center text-sm relative select-none',
                 !inMonth && 'text-gray-300',
+                inMonth && off && 'bg-gray-100 text-gray-400',
+                inMonth && custom && 'bg-amber-50',
                 today && 'ring-2 ring-accent',
-                inMonth && 'hover:bg-gray-50',
+                inMonth && !off && 'hover:bg-gray-50',
               )}
             >
-              {format(d, 'd')}
+              {inMonth && custom && ex?.start && ex?.end && (
+                <span className="absolute top-0.5 text-[8px] leading-none text-amber-700">
+                  {ex.start.replace(/:00$/, '')}–{ex.end.replace(/:00$/, '')}
+                </span>
+              )}
+              <span className={cn(inMonth && off && ex && 'line-through')}>{format(d, 'd')}</span>
+              {inMonth && off && <span className="text-[8px] leading-none">вых</span>}
               {busy && <span className="absolute bottom-1.5 h-1.5 w-1.5 rounded-full bg-accent" />}
             </button>
           );
         })}
       </div>
+      <div className="mt-4 space-y-1 text-[11px] text-gray-500">
+        <div className="flex items-center gap-2">
+          <span className="inline-block h-3 w-3 rounded bg-gray-100 border border-gray-200" /> выходной
+          <span className="inline-block h-3 w-3 rounded bg-amber-50 border border-amber-200 ml-3" /> своё время
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent ml-3" /> есть записи
+        </div>
+        <p>Нажмите и удерживайте дату, чтобы сделать её выходным или изменить время работы.</p>
+      </div>
+      {menuDay && <DayMenuSheet dayKey={menuDay} onClose={() => setMenuDay(null)} />}
     </div>
   );
 }

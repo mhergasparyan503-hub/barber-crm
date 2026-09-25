@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { authPost } from '@/lib/server-auth';
 import { cn } from '@/lib/cn';
+import { PasswordInput } from './PasswordInput';
 
 type Mode = 'login' | 'register' | 'forgot';
 
@@ -54,7 +55,7 @@ export function AuthScreen({
     if (mode !== 'forgot' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       return setError('Введите email');
     }
-    if (password.length < 8) return setError('Пароль — минимум 8 символов');
+    if (password.trim().length < 8) return setError('Пароль — минимум 8 символов');
     if (mode !== 'login' && password !== password2) return setError('Пароли не совпадают');
     if (mode !== 'login' && !/^\d{6}$/.test(code.trim())) return setError('Введите 6-значный код из Telegram');
     setBusy(true);
@@ -105,6 +106,9 @@ export function AuthScreen({
                 type="email"
                 inputMode="email"
                 autoComplete="username"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
@@ -138,23 +142,21 @@ export function AuthScreen({
             <span className="text-xs text-gray-500 mb-1 block">
               {mode === 'login' ? 'Пароль' : 'Новый пароль (минимум 8 символов)'}
             </span>
-            <input
+            <PasswordInput
               className={inputCls}
-              type="password"
               autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={setPassword}
             />
           </label>
           {mode !== 'login' && (
             <label className="block">
               <span className="text-xs text-gray-500 mb-1 block">Повторите пароль</span>
-              <input
+              <PasswordInput
                 className={inputCls}
-                type="password"
                 autoComplete="new-password"
                 value={password2}
-                onChange={(e) => setPassword2(e.target.value)}
+                onChange={setPassword2}
               />
             </label>
           )}

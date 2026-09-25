@@ -152,7 +152,7 @@ async function main() {
     if (r !== 'ok') {
       return c.json({ ok: false, error: r === 'bad' ? 'Неверный код' : 'Код устарел — запросите новый' }, 400);
     }
-    if (!auth.register(email, b.password)) return c.json({ ok: false, error: 'Регистрация закрыта' }, 409);
+    if (!auth.register(email, auth.cleanPassword(b.password))) return c.json({ ok: false, error: 'Регистрация закрыта' }, 409);
     loggedIn(c);
     void tellMaster(`✅ CRM: создан аккаунт владельца (${email}). Регистрация закрыта.`);
     return c.json({ ok: true, email });
@@ -162,11 +162,13 @@ async function main() {
     const b = (await c.req.json().catch(() => ({}))) as any;
     const email = auth.normEmail(b?.email);
     if (loginBlocked(c, email)) {
-      return c.json({ ok: false, error: 'Слишком много попыток. Подождите 15 минут.' }, 429);
+      const m = Math.max(auth.waitMinutes('ip:' + clientIp(c), MIN15), auth.waitMinutes('em:' + email, MIN15));
+      return c.json({ ok: false, error: `Слишком много попыток. Подождите ${m} мин.` }, 429);
     }
     if (!auth.hasAccount()) return c.json({ ok: false, error: 'Аккаунт ещё не создан' }, 400);
     if (!auth.checkLogin(email, String(b?.password || ''))) {
       await loginFailed(c, email);
+      console.warn('[auth] login failed');
       return c.json({ ok: false, error: 'Неверный email или пароль' }, 401);
     }
     auth.clearHits('ip:' + clientIp(c));
@@ -189,7 +191,7 @@ async function main() {
     if (r !== 'ok') {
       return c.json({ ok: false, error: r === 'bad' ? 'Неверный код' : 'Код устарел — запросите новый' }, 400);
     }
-    auth.setPassword(b.password);
+    auth.setPassword(auth.cleanPassword(b.password));
     auth.destroyOtherSessions();
     loggedIn(c);
     void tellMaster('🔐 CRM: пароль сброшен по коду. Все другие входы завершены.');
@@ -200,13 +202,16 @@ async function main() {
     if (!auth.sessionValid(sessToken(c))) return c.json({ ok: false, error: 'unauthorized' }, 401);
     const b = (await c.req.json().catch(() => ({}))) as any;
     const key = 'chg:' + clientIp(c);
-    if (auth.limited(key, 5, MIN15)) return c.json({ ok: false, error: 'Слишком много попыток. Подождите 15 минут.' }, 429);
+    if (auth.limited(key, 5, MIN15)) {
+      return c.json({ ok: false, code: 'rate', error: `Слишком много попыток. Подождите ${auth.waitMinutes(key, MIN15)} мин.` }, 429);
+    }
     if (!auth.checkPassword(String(b?.current || ''))) {
-      auth.hit(key, MIN15);
-      return c.json({ ok: false, error: 'Текущий пароль неверный' }, 400);
+      const n = auth.hit(key, MIN15);
+      console.warn('[auth] wrong current password on change', n);
+      return c.json({ ok: false, code: 'current', error: `Неверный текущий пароль (попытка ${n} из 5)` }, 400);
     }
     if (!auth.passwordOk(b?.password)) return c.json({ ok: false, error: 'Новый пароль — минимум 8 символов' }, 400);
-    auth.setPassword(b.password);
+    auth.setPassword(auth.cleanPassword(b.password));
     auth.destroyOtherSessions(sessToken(c) || undefined);
     void tellMaster('🔐 CRM: пароль изменён. Другие входы завершены.');
     return c.json({ ok: true });
@@ -216,10 +221,13 @@ async function main() {
     if (!auth.sessionValid(sessToken(c))) return c.json({ ok: false, error: 'unauthorized' }, 401);
     const b = (await c.req.json().catch(() => ({}))) as any;
     const key = 'chg:' + clientIp(c);
-    if (auth.limited(key, 5, MIN15)) return c.json({ ok: false, error: 'Слишком много попыток. Подождите 15 минут.' }, 429);
+    if (auth.limited(key, 5, MIN15)) {
+      return c.json({ ok: false, code: 'rate', error: `Слишком много попыток. Подождите ${auth.waitMinutes(key, MIN15)} мин.` }, 429);
+    }
     if (!auth.checkPassword(String(b?.current || ''))) {
-      auth.hit(key, MIN15);
-      return c.json({ ok: false, error: 'Текущий пароль неверный' }, 400);
+      const n = auth.hit(key, MIN15);
+      console.warn('[auth] wrong current password on change', n);
+      return c.json({ ok: false, code: 'current', error: `Неверный текущий пароль (попытка ${n} из 5)` }, 400);
     }
     const email = auth.normEmail(b?.email);
     if (!auth.emailOk(email)) return c.json({ ok: false, error: 'Неверный email' }, 400);

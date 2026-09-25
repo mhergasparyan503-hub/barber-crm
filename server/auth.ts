@@ -64,7 +64,9 @@ function verifyPassword(pw: string, stored: string): boolean {
 
 export const normEmail = (e: unknown) => String(e || '').trim().toLowerCase();
 export const emailOk = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e.length <= 120;
-export const passwordOk = (p: unknown) => typeof p === 'string' && p.length >= 8 && p.length <= 200;
+export const passwordOk = (p: unknown) => typeof p === 'string' && p.trim().length >= 8 && p.length <= 200;
+/** New passwords are stored without stray spaces at the ends (phone keyboards add them). */
+export const cleanPassword = (p: unknown) => String(p || '').trim();
 
 export function hasAccount(): boolean {
   return !!load().user;
@@ -153,15 +155,36 @@ export function register(email: string, password: string): boolean {
   save();
   return true;
 }
+/**
+ * Tolerant check for phone keyboards: exact first, then without stray spaces at the ends,
+ * then with the first letter's case flipped (auto-capitalization). Rate limits still apply.
+ */
+function passwordVariants(pw: string): string[] {
+  const out = [pw];
+  const t = pw.trim();
+  if (t !== pw) out.push(t);
+  for (const v of [pw, t]) {
+    if (!v) continue;
+    const f = v[0];
+    const flipped = f === f.toUpperCase() ? f.toLowerCase() : f.toUpperCase();
+    if (flipped !== f) out.push(flipped + v.slice(1));
+  }
+  return [...new Set(out)];
+}
+function verifyAny(pw: string, stored: string): boolean {
+  let ok = false;
+  for (const v of passwordVariants(pw)) if (verifyPassword(v, stored)) ok = true;
+  return ok;
+}
 export function checkLogin(email: string, password: string): boolean {
   const u = load().user;
   if (!u) return false;
-  const passOk = verifyPassword(password, u.hash); // always run (timing)
+  const passOk = verifyAny(password, u.hash); // always run (timing)
   return passOk && normEmail(email) === u.email;
 }
 export function checkPassword(password: string): boolean {
   const u = load().user;
-  return !!u && verifyPassword(password, u.hash);
+  return !!u && verifyAny(password, u.hash);
 }
 export function setPassword(password: string) {
   const u = load().user;
@@ -193,6 +216,12 @@ export function hit(key: string, windowMs: number): number {
   arr.push(now);
   buckets.set(key, arr);
   return arr.length;
+}
+/** Minutes until the oldest hit in the window expires (for «подождите N минут»). */
+export function waitMinutes(key: string, windowMs: number): number {
+  const arr = buckets.get(key) || [];
+  if (!arr.length) return 0;
+  return Math.max(1, Math.ceil((arr[0] + windowMs - Date.now()) / 60000));
 }
 export function clearHits(key: string) {
   buckets.delete(key);

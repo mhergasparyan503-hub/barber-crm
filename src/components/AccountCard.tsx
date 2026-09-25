@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { authPost, authStatus } from '@/lib/server-auth';
 import { logout as pinLogout } from '@/lib/auth';
+import { PasswordInput } from './PasswordInput';
 
 const inputCls = 'mt-1 w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-900';
 
@@ -14,12 +15,14 @@ export function AccountCard() {
   const [next2, setNext2] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     void authStatus().then((s) => setEmail(s?.email || ''));
   }, []);
 
   const reset = () => {
+    setError('');
     setOpen('');
     setCurrent('');
     setNext('');
@@ -28,21 +31,25 @@ export function AccountCard() {
   };
 
   async function changePassword() {
-    if (next.length < 8) return toast.error('Новый пароль — минимум 8 символов');
-    if (next !== next2) return toast.error('Пароли не совпадают');
+    setError('');
+    if (!current) return setError('Введите текущий пароль');
+    if (next.trim().length < 8) return setError('Новый пароль — минимум 8 символов');
+    if (next.trim() !== next2.trim()) return setError('Новые пароли не совпадают');
     setBusy(true);
     const r = await authPost('change-password', { current, password: next });
     setBusy(false);
-    if (!r.ok) return toast.error(r.error || 'Ошибка');
+    if (!r.ok) return setError(r.error || 'Ошибка');
     toast.success('Пароль изменён');
     reset();
   }
 
   async function changeEmail() {
+    setError('');
+    if (!current) return setError('Введите текущий пароль');
     setBusy(true);
     const r = await authPost('change-email', { current, email: newEmail });
     setBusy(false);
-    if (!r.ok) return toast.error(r.error || 'Ошибка');
+    if (!r.ok) return setError(r.error || 'Ошибка');
     setEmail(String(r.email || newEmail));
     toast.success('Email изменён');
     reset();
@@ -63,14 +70,20 @@ export function AccountCard() {
         <button
           type="button"
           className="touch-btn flex-1 rounded-xl border border-gray-200 font-medium"
-          onClick={() => setOpen(open === 'password' ? '' : 'password')}
+          onClick={() => {
+            setError('');
+            setOpen(open === 'password' ? '' : 'password');
+          }}
         >
           Сменить пароль
         </button>
         <button
           type="button"
           className="touch-btn flex-1 rounded-xl border border-gray-200 font-medium"
-          onClick={() => setOpen(open === 'email' ? '' : 'email')}
+          onClick={() => {
+            setError('');
+            setOpen(open === 'email' ? '' : 'email');
+          }}
         >
           Сменить email
         </button>
@@ -79,17 +92,18 @@ export function AccountCard() {
         <div className="space-y-2">
           <label className="block text-xs text-gray-500">
             Текущий пароль
-            <input className={inputCls} type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+            <PasswordInput className={inputCls} autoComplete="current-password" value={current} onChange={setCurrent} />
           </label>
+          {error && <p className="text-sm text-red-600">{error}</p>}
           {open === 'password' ? (
             <>
               <label className="block text-xs text-gray-500">
                 Новый пароль (минимум 8 символов)
-                <input className={inputCls} type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
+                <PasswordInput className={inputCls} autoComplete="new-password" value={next} onChange={setNext} />
               </label>
               <label className="block text-xs text-gray-500">
                 Повторите новый пароль
-                <input className={inputCls} type="password" autoComplete="new-password" value={next2} onChange={(e) => setNext2(e.target.value)} />
+                <PasswordInput className={inputCls} autoComplete="new-password" value={next2} onChange={setNext2} />
               </label>
               <button type="button" disabled={busy} onClick={changePassword} className="touch-btn w-full rounded-xl bg-accent text-white font-semibold disabled:opacity-60">
                 Сохранить пароль
@@ -99,7 +113,7 @@ export function AccountCard() {
             <>
               <label className="block text-xs text-gray-500">
                 Новый email
-                <input className={inputCls} type="email" inputMode="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
+                <input className={inputCls} type="email" inputMode="email" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
               </label>
               <button type="button" disabled={busy} onClick={changeEmail} className="touch-btn w-full rounded-xl bg-accent text-white font-semibold disabled:opacity-60">
                 Сохранить email

@@ -18,6 +18,8 @@ import { hasConflict } from '@/lib/slots';
 import { cn } from '@/lib/cn';
 import type { BookingMode } from './BookingSheet';
 import { mskDateKey, mskDow, parseApStart } from '@/lib/msk';
+import { useLongPress } from '@/lib/useLongPress';
+import { DayMenuSheet } from './DayMenuSheet';
 
 const PX_PER_HOUR = 64;
 const SLOT_MIN = 15;
@@ -41,6 +43,8 @@ export function Journal({
     appointmentId: string;
   } | null>(null);
   const [slotMenu, setSlotMenu] = useState<Date | null>(null);
+  const [menuDay, setMenuDay] = useState<string | null>(null);
+  const dayLongPress = useLongPress();
   /** Live drag preview: snapped top offset in px from grid start */
   const [dragPreview, setDragPreview] = useState<{
     id: string;
@@ -274,14 +278,20 @@ export function Journal({
           {weekDays.map((d) => {
             const active = mskDateKey(d) === dayKey;
             const today = mskDateKey(d) === mskDateKey(now);
+            const dayOff = !getDayPlan(
+              state.schedules.find((x) => x.staffId === STAFF_ID),
+              state.exceptions,
+              STAFF_ID,
+              mskDateKey(d),
+            ).working;
             return (
               <button
                 key={+d}
                 type="button"
-                onClick={() => onDayTap(d)}
+                {...dayLongPress(() => setMenuDay(mskDateKey(d)), () => onDayTap(d))}
                 className={cn(
                   'flex-1 rounded-xl py-1.5 text-center transition',
-                  active ? 'bg-accent text-white' : 'text-gray-700',
+                  active ? 'bg-accent text-white' : dayOff ? 'text-gray-300' : 'text-gray-700',
                 )}
               >
                 <div className="text-[10px] uppercase opacity-80">{WEEKDAY_SHORT[mskDow(mskDateKey(d))]}</div>
@@ -454,6 +464,8 @@ export function Journal({
           </div>
         )}
       </div>
+
+      {menuDay && <DayMenuSheet dayKey={menuDay} onClose={() => setMenuDay(null)} />}
 
       {slotMenu && (
         <div className="fixed inset-0 z-[55] bg-black/40 flex items-end" onClick={() => setSlotMenu(null)}>
