@@ -26,7 +26,8 @@ function kb(rows: { text: string; callback_data: string }[][]) {
 function rbtn(text: string) {
   return { text: text || '·' };
 }
-function replyKb(rows: { text: string }[][]) {
+const MENU_SHARE_PHONE = '📱 Поделиться номером';
+function replyKb(rows: { text: string; request_contact?: boolean }[][]) {
   return {
     keyboard: rows,
     resize_keyboard: true,
@@ -91,7 +92,7 @@ function clientReplyKeyboard(crm: Crm, chatId: string, clientId?: string) {
     crm.clients.find((c) => c.id === clientId) ||
     crm.clients.find((c) => String(c.telegramChatId) === chatId);
   const nearest = findNearestUpcoming(crm, client?.id);
-  const rows: { text: string }[][] = [
+  const rows: { text: string; request_contact?: boolean }[][] = [
     [rbtn(MENU_BOOK), rbtn(MENU_MY)],
     [rbtn(MENU_CHAT)],
   ];
@@ -99,6 +100,8 @@ function clientReplyKeyboard(crm: Crm, chatId: string, clientId?: string) {
     rows.unshift([rbtn(MENU_MOVE), rbtn(MENU_CANCEL), rbtn(MENU_REMIND)]);
     rows[1] = [rbtn(MENU_BOOK_MORE), rbtn(MENU_MY)];
   }
+  // Chat not linked to a client yet → offer to link by the Telegram-verified phone.
+  if (!client && !isOwnerChat(crm, chatId)) rows.push([{ text: MENU_SHARE_PHONE, request_contact: true }]);
   return replyKb(rows);
 }
 
@@ -843,6 +846,29 @@ async function handleMessage(token: string, msg: any, crm: Crm) {
   const text = (msg.text || '').trim();
   const username = msg.from?.username;
 
+  if (msg.contact && !isOwnerChat(crm, chatId)) {
+    // Only the user's own contact (Telegram guarantees user_id ↔ phone) — never a forwarded one.
+    if (!msg.from?.id || String(msg.contact.user_id || '') !== String(msg.from.id)) {
+      await sendMessage(token, chatId, `Отправьте, пожалуйста, свой номер кнопкой «${MENU_SHARE_PHONE}» внизу.`, clientReplyKeyboard(crm, chatId));
+      return;
+    }
+    const matches = linkByVerifiedPhone(crm, chatId, username, String(msg.contact.phone_number || ''));
+    console.log('tg contact shared chat', chatId, 'matched clients', matches.length);
+    if (!matches.length) {
+      setDraft(crm, chatId, { ...getDraft(crm, chatId), phone: normalizePhone(String(msg.contact.phone_number || '')) });
+      await sendMessage(
+        token,
+        chatId,
+        'На этот номер записей пока нет. Можно записаться кнопкой «Записаться» внизу.',
+        clientReplyKeyboard(crm, chatId),
+      );
+      return;
+    }
+    await sendMessage(token, chatId, `Готово, ${matches[0].name || 'номер привязан'}! Теперь здесь будут ваши записи и напоминания.`, clientReplyKeyboard(crm, chatId, matches[0].id));
+    await showMyAppointments(token, chatId, crm);
+    return;
+  }
+
   if (text.startsWith('/start')) {
     const rawPayload = text.split(/\s+/)[1] || '';
     const payload = rawPayload.trim().toLowerCase();
@@ -883,11 +909,8 @@ async function handleMessage(token: string, msg: any, crm: Crm) {
     if (rawPayload.startsWith('c_')) {
       const clientId = rawPayload.slice(2);
       const client = crm.clients.find((c) => c.id === clientId);
-      if (client) {
-        client.telegramChatId = chatId;
-        client.telegramUsername = username;
-      }
-      linkChat(crm, chatId, username, clientId);
+      if (client) attachChatToClient(crm, client, chatId, username);
+      linkChat(crm, chatId, username, client ? clientId : undefined);
       await sendClientMenu(token, chatId, crm, clientId);
       console.log('tg /start c_ → ReplyKeyboard chat', chatId, 'has_reply_markup', true);
       return;
@@ -901,8 +924,7 @@ async function handleMessage(token: string, msg: any, crm: Crm) {
       if (ap) {
         const client = crm.clients.find((c) => c.id === ap.clientId);
         if (client) {
-          client.telegramChatId = chatId;
-          client.telegramUsername = username;
+          attachChatToClient(crm, client, chatId, username);
           clientId = client.id;
         }
         if (!ap.telegramChatId) ap.telegramChatId = chatId;
@@ -1152,7 +1174,8 @@ async function sendClientMenu(token: string, chatId: string, crm: Crm, clientId?
   await sendMessage(
     token,
     chatId,
-    `Добро пожаловать в ${crm.settings.studioName || 'Барбершоп'}!\n\nМеню внизу экрана: Записаться, Мои записи, Написать мастеру.`,
+    `Добро пожаловать в ${crm.settings.studioName || 'Барбершоп'}!\n\nМеню внизу экрана: Записаться, Мои записи, Написать мастеру.` +
+      (client || isOwnerChat(crm, chatId) ? '' : `\n\nМастер уже записал вас? Нажмите «${MENU_SHARE_PHONE}» — покажу вашу запись и пришлю напоминание.`),
     markup,
   );
 }
@@ -1229,6 +1252,34 @@ function linkChat(crm: Crm, chatId: string, username?: string, clientId?: string
   else crm.telegramChats.push(row);
 }
 
+/** Attach this chat to a client: client + their upcoming visits get the chat (reminders go there). */
+function attachChatToClient(crm: Crm, client: any, chatId: string, username?: string) {
+  client.telegramChatId = chatId;
+  if (username) client.telegramUsername = username;
+  const now = Date.now();
+  for (const a of crm.appointments || []) {
+    if (a.clientId !== client.id || !isBookedStatus(a.status)) continue;
+    if (parseApStart(apStart(a)).getTime() < now) continue;
+    if (!a.telegramChatId) a.telegramChatId = chatId;
+  }
+}
+
+/**
+ * Link by a phone Telegram itself confirmed (contact shared by its owner).
+ * Matches all CRM clients with the same number (duplicates = same person). Returns matched clients.
+ */
+function linkByVerifiedPhone(crm: Crm, chatId: string, username: string | undefined, rawPhone: string) {
+  const needle = phoneLast10(rawPhone);
+  if (needle.length < 10) return [];
+  const matches = (crm.clients || []).filter((c) => phoneLast10(c.phone || '') === needle);
+  if (!matches.length) return [];
+  // Prefer the client with the nearest upcoming visit as the main one.
+  matches.sort((a, b) => (findNearestUpcoming(crm, a.id) ? 0 : 1) - (findNearestUpcoming(crm, b.id) ? 0 : 1));
+  for (const c of matches) attachChatToClient(crm, c, chatId, username);
+  linkChat(crm, chatId, username, matches[0].id);
+  return matches;
+}
+
 function findBySuffix(list: any[], suffix: string) {
   return list.find((x) => String(x.id).endsWith(suffix));
 }
@@ -1254,14 +1305,25 @@ async function startBookingServices(token: string, chatId: string, crm: Crm) {
 }
 
 async function showMyAppointments(token: string, chatId: string, crm: Crm) {
-  const client = crm.clients.find((c) => String(c.telegramChatId) === chatId);
+  const ids = new Set(crm.clients.filter((c) => String(c.telegramChatId) === chatId).map((c) => c.id));
   const list = crm.appointments
     .filter(
       (a) =>
-        a.clientId === client?.id && isBookedStatus(a.status) && parseApStart(apStart(a)) > new Date(),
+        (ids.has(a.clientId) || String(a.telegramChatId || '') === chatId) &&
+        isBookedStatus(a.status) &&
+        parseApStart(apStart(a)) > new Date(),
     )
     .sort((a, b) => +parseApStart(apStart(a)) - +parseApStart(apStart(b)));
   if (!list.length) {
+    if (!ids.size && !isOwnerChat(crm, chatId)) {
+      await sendMessage(
+        token,
+        chatId,
+        `Пока не вижу ваших записей в этом Telegram.\n\nЕсли мастер записал вас по телефону — нажмите внизу «${MENU_SHARE_PHONE}», и я покажу вашу запись.`,
+        clientReplyKeyboard(crm, chatId),
+      );
+      return;
+    }
     await sendMessage(token, chatId, 'Нет ближайших записей.', kb([[btn('📅 Записаться', 'bk:go')]]));
     return;
   }
@@ -1272,7 +1334,7 @@ async function showMyAppointments(token: string, chatId: string, crm: Crm) {
       return `• ${p.date} ${p.time} — ${svc?.name || 'услуга'}`;
     })
     .join('\n');
-  await sendMessage(token, chatId, lines, kb([[btn('📋 Меню', 'bk:menu')]]));
+  await sendMessage(token, chatId, `Ваши записи:\n${lines}`, kb([[btn('📋 Меню', 'bk:menu')]]));
 }
 
 async function handleCallback(token: string, cq: any, crm: Crm) {
@@ -1795,7 +1857,15 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
     }
   } else {
     client = crm.clients.find((c) => String(c.telegramChatId) === chatId);
-    if (!client) {
+    const typedMatch =
+      !client && draft.phone
+        ? crm.clients.find((c) => !c.telegramChatId && phoneLast10(c.phone || '') === phoneLast10(draft.phone))
+        : undefined;
+    if (typedMatch) {
+      // Same person booked earlier by the master: reuse the record (no duplicate).
+      // The phone was typed, not verified — only this visit gets the chat (ap.telegramChatId below).
+      client = typedMatch;
+    } else if (!client) {
       const id = 'cli_' + Math.random().toString(36).slice(2, 10);
       client = {
         id,
@@ -1812,7 +1882,7 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
       client.telegramChatId = chatId;
       if (from?.username) client.telegramUsername = from.username;
     }
-    linkChat(crm, chatId, from?.username, client.id);
+    if (!typedMatch) linkChat(crm, chatId, from?.username, client.id);
   }
 
   // Apply default reminder prefs from client
@@ -1866,7 +1936,10 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
   if (ownerMode) {
     const summary =
       `Клиент записан.\n\n${client.name || 'Клиент'}\n${client.phone || '—'}\n` +
-      `${svc?.name || 'услуга'}\n${draft.day} в ${draft.time}\n${svc?.durationMin || 45} мин`;
+      `${svc?.name || 'услуга'}\n${draft.day} в ${draft.time}\n${svc?.durationMin || 45} мин` +
+      (!clientTg && crm.settings?.telegramBotUsername
+        ? `\n\nСсылка для клиента (откроет бота с его записью и напоминаниями):\nhttps://t.me/${String(crm.settings.telegramBotUsername).replace(/^@/, '')}?start=v_${ap.id}`
+        : '');
     await sendMessage(token, chatId, summary, ownerReplyKeyboard());
     // Same reminder prompt as clients (delivery goes to client TG when linked; else skipped gracefully)
     let prompt = 'Запись подтверждена. Поставить напоминание?';

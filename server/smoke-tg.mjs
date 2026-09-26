@@ -789,7 +789,7 @@ console.log('\nALL SMOKE PASSED');
 // 13) first-time client ALSO gets reminder picker after booking
 {
   g.__tgSent = [];
-  const day = mskParts(new Date(Date.now() + 3 * 86400000)).date;
+  const day = mskParts(new Date(Date.now() + 11 * 86400000)).date; // away from D0–D3 used (and closed) by earlier cases
   // linked client with contacts but ZERO prior appointments (= first booking)
   crm.clients = crm.clients.filter((c) => String(c.telegramChatId) !== '777');
   crm.appointments = crm.appointments.filter((a) => String(a.telegramChatId) !== '777' && a.clientId !== 'cli_newbie');

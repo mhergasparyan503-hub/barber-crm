@@ -31,7 +31,13 @@ export function notifyOwnerNewVisit(
       : opts.source === 'telegram'
         ? 'Новая запись'
         : 'Новая запись в журнале';
-  const text = `${title}\n\n${opts.clientName}\n${opts.clientPhone}\n${opts.serviceNames}\n${when}\n${opts.durationMin} мин`;
+  let text = `${title}\n\n${opts.clientName}\n${opts.clientPhone}\n${opts.serviceNames}\n${when}\n${opts.durationMin} мин`;
+  const bot = (state.settings.telegramBotUsername || '').replace(/^@/, '');
+  if (opts.source !== 'telegram' && bot && /^[A-Za-z0-9_-]{1,60}$/.test(String(opts.appointmentId))) {
+    text +=
+      `\n\nСсылка для клиента (откроет бота с его записью и напоминаниями):\n` +
+      `https://t.me/${bot}?start=v_${opts.appointmentId}`;
+  }
   const sid = String(opts.appointmentId).slice(-10);
   const reply_markup = {
     inline_keyboard: [
