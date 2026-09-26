@@ -740,7 +740,11 @@ async function performClientCancel(token: string, chatId: string, crm: Crm) {
     await sendMessage(
       token,
       crm.settings.telegramOwnerChatId,
-      `Клиент отменил запись ${when.date} ${when.time}`,
+      (() => {
+        const cl = crm.clients.find((c) => c.id === ap.clientId);
+        const svc = crm.services.find((x) => ap.serviceIds?.includes(x.id));
+        return `❌ Клиент отменил запись\n\n${cl?.name || 'Клиент'}\n${cl?.phone || '—'}\n${svc?.name || 'услуга'}\n${when.date} ${when.time}`;
+      })(),
     );
   }
 }
@@ -1132,7 +1136,8 @@ async function handleMessage(token: string, msg: any, crm: Crm) {
 
   // client free text → owner
   const client = crm.clients.find((c) => String(c.telegramChatId) === chatId);
-  const name = client?.name || username || 'Клиент';
+  const fromName = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ');
+  const name = client?.name || [fromName, username ? '@' + username : ''].filter(Boolean).join(' ') || 'Клиент';
   const owner = crm.settings.telegramOwnerChatId;
   if (owner) {
     const nearest = crm.appointments

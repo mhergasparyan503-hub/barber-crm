@@ -50,7 +50,7 @@ export async function sendMessage(
     const g = globalThis as any;
     g.__tgSent = g.__tgSent || [];
     g.__tgSent.push({ chatId: String(chatId), text, reply_markup });
-    if (process.env.TG_SMOKE_LOG === '1') console.log('[tg-capture]', chatId, JSON.stringify(text));
+    if (process.env.TG_SMOKE_LOG === '1') console.log('[tg-capture]', JSON.stringify({ chatId: String(chatId), text, reply_markup }));
     return { ok: true, result: { message_id: g.__tgSent.length } };
   }
   const res = await tg(token, 'sendMessage', {
@@ -76,6 +76,7 @@ export async function editMessageText(
     const g = globalThis as any;
     g.__tgSent = g.__tgSent || [];
     g.__tgSent.push({ chatId: String(chatId), text, reply_markup, edit: messageId });
+    if (process.env.TG_SMOKE_LOG === '1') console.log('[tg-capture]', JSON.stringify({ chatId: String(chatId), text, reply_markup, edit: messageId }));
     return { ok: true, result: { message_id: messageId } };
   }
   const res = await tg(token, 'editMessageText', {

@@ -16,7 +16,8 @@ export function notifyOwnerNewVisit(
   },
 ) {
   const { telegramToken, telegramOwnerChatId } = state.settings;
-  if (!telegramToken || !telegramOwnerChatId) return;
+  // Token may be absent in this browser (it is never sent from the server) — the server uses its stored one.
+  if (!telegramOwnerChatId) return;
 
   let when = opts.startISO;
   try {
@@ -53,7 +54,7 @@ export function notifyOwnerNewVisit(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      token: telegramToken,
+      token: telegramToken || '',
       chatId: telegramOwnerChatId,
       text,
       reply_markup,
