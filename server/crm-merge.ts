@@ -38,6 +38,20 @@ function pickAppt(inc: any, prev: any): any {
   }
   const other = chosen === inc ? prev : inc;
   chosen.reminders = mergeSent(chosen.reminders, other.reminders);
+  // Same timestamp = neither side knows the other's edit: never drop reminders the other side has.
+  if (ts(prev) === ts(inc) && other.reminders?.length) {
+    const have = new Set((chosen.reminders || []).map((r: Rem) => r.kind));
+    const extra = other.reminders.filter((r: Rem) => !have.has(r.kind));
+    if (extra.length) chosen.reminders = [...(chosen.reminders || []), ...extra];
+  }
+  // A side that never had reminders (no field) must not wipe reminders set on the other side.
+  if (chosen.reminders === undefined && other.reminders?.length) {
+    // Keep them relative to the visit if it was moved on the other side.
+    const d = Date.parse(chosen.start) - Date.parse(other.start);
+    chosen.reminders = other.reminders.map((r: Rem) =>
+      d && Number.isFinite(d) && !r.sent ? { ...r, at: new Date(Date.parse(r.at) + d).toISOString() } : r,
+    );
+  }
   if (!chosen.telegramChatId && other.telegramChatId) chosen.telegramChatId = other.telegramChatId;
   return chosen;
 }

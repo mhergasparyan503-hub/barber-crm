@@ -11,6 +11,7 @@ import {
   notifyOwner,
   findClientsByPhone,
   staffIdOf,
+  applyClientReminderPrefs,
 } from './telegram-inbox';
 import { claimUpdateId } from './tg-dedup';
 import { withCrmLock, mergeIncoming, stampChanges, publicView } from './crm-merge';
@@ -258,7 +259,13 @@ async function main() {
       const prev = (await loadCrmSnapshot()) as any;
       // Merge instead of overwrite: keeps bot/online bookings the browser hasn't pulled yet,
       // bot drafts, sent-reminder flags, bot schedule edits; only tombstoned deletes remove.
-      await saveCrmSnapshot(prev ? mergeIncoming(prev, incoming) : incoming);
+      const merged = prev ? mergeIncoming(prev, incoming) : incoming;
+      // New visits booked by the master in the CRM: apply the client's saved reminder choices.
+      const known = new Set<string>((prev?.appointments || []).map((a: any) => a.id));
+      for (const a of merged.appointments || []) {
+        if (!known.has(a.id)) applyClientReminderPrefs(merged, a);
+      }
+      await saveCrmSnapshot(merged);
     });
     return c.json({ ok: true });
   });

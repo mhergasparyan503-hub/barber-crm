@@ -600,7 +600,7 @@ g.__tgSent = [];
   });
   Object.assign(crm, r.patch);
   assert(crm.appointments[0].reminders?.some((x) => x.kind === '30m'), '30m reminder');
-  assert(cli.reminderPrefs?.includes(30), 'prefs remembered');
+  assert(crm.clients.find((c) => c.id === cli.id).reminderPrefs?.includes(30), 'prefs remembered'); // re-read: patch has fresh copies
   r = await handleUpdate(crm, {
     update_id: 101,
     callback_query: {
@@ -612,7 +612,7 @@ g.__tgSent = [];
   });
   Object.assign(crm, r.patch);
   assert(crm.appointments[0].reminders?.some((x) => x.kind === 'morning'), 'morning reminder');
-  assert(cli.reminderMorning === true, 'morning pref');
+  assert(crm.clients.find((c) => c.id === cli.id).reminderMorning === true, 'morning pref');
   r = await handleUpdate(crm, {
     update_id: 102,
     callback_query: {
@@ -624,8 +624,8 @@ g.__tgSent = [];
   });
   Object.assign(crm, r.patch);
   assert((crm.appointments[0].reminders || []).length === 0, 'reminders cleared');
-  assert((cli.reminderPrefs || []).length === 0, 'prefs cleared');
-  assert(cli.reminderMorning === false, 'morning cleared');
+  assert((crm.clients.find((c) => c.id === cli.id).reminderPrefs || []).length === 0, 'prefs cleared');
+  assert(crm.clients.find((c) => c.id === cli.id).reminderMorning === false, 'morning cleared');
   console.log('OK reminders prefs + Не напоминать');
 }
 
@@ -879,7 +879,8 @@ console.log('\nALL SMOKE PASSED');
     },
   });
   Object.assign(crm, r.patch);
-  assert(apA.reminders.some((x) => x.kind === '15m') && apA.reminders.some((x) => x.kind === '30m'), 'stacked 15m+30m');
+  const apA2 = crm.appointments.find((x) => x.id === apA.id);
+  assert(apA2.reminders.some((x) => x.kind === '15m') && apA2.reminders.some((x) => x.kind === '30m'), 'stacked 15m+30m');
   const after = g.__tgSent.find((m) => (m.text || '').includes('установлено'));
   const aflat = after?.reply_markup?.inline_keyboard?.flat().map((b) => b.text) || [];
   assert(hasLabel(aflat, 'Добавить ещё напоминание') && hasLabel(aflat, 'Готово'), 'add-more / done');

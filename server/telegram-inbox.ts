@@ -542,16 +542,21 @@ export type InboxResult = {
 };
 
 function cloneCrm(crm: Crm): Crm {
+  // Deep copy: handlers mutate rows (reminders, status, chat links). With a shallow copy the
+  // original snapshot changed too, stampChanges saw «no change», updatedAt stayed old and the
+  // next browser flush (same updatedAt → browser wins) silently dropped the bot's edits.
+  const src = JSON.parse(JSON.stringify(crm || {}));
   return {
-    clients: [...(crm.clients || [])],
-    appointments: [...(crm.appointments || [])],
-    telegramChats: [...(crm.telegramChats || [])],
-    services: [...(crm.services || [])],
-    staff: [...(crm.staff || [])],
-    windows: [...(crm.windows || [])],
-    schedules: [...(crm.schedules || [])],
-    exceptions: [...(crm.exceptions || [])],
-    settings: { ...(crm.settings || {}) },
+    ...src,
+    clients: src.clients || [],
+    appointments: src.appointments || [],
+    telegramChats: src.telegramChats || [],
+    services: src.services || [],
+    staff: src.staff || [],
+    windows: src.windows || [],
+    schedules: src.schedules || [],
+    exceptions: src.exceptions || [],
+    settings: src.settings || {},
   };
 }
 
@@ -951,6 +956,7 @@ async function handleMessage(token: string, msg: any, crm: Crm) {
           clientId = client.id;
         }
         if (!ap.telegramChatId) ap.telegramChatId = chatId;
+        applyClientReminderPrefs(crm, ap);
       }
       linkChat(crm, chatId, username, clientId);
       await sendClientMenu(token, chatId, crm, clientId);
@@ -2183,6 +2189,30 @@ function parseCustomReminder(text: string, start: string): number | null {
 }
 
 /** Server-side due-reminder delivery (production webhook has no browser TelegramBridge). */
+/**
+ * Client's saved reminder choices (set earlier in the bot / online) → reminders for a visit that has none
+ * (e.g. booked by the master in the CRM). Skips reminder times already passed. Returns true if added.
+ */
+export function applyClientReminderPrefs(crm: Crm, ap: any): boolean {
+  if (!ap || ap.status === 'cancelled' || (ap.reminders && ap.reminders.length)) return false;
+  const client = (crm.clients || []).find((c) => c.id === ap.clientId);
+  if (!client) return false;
+  const start = apStart(ap);
+  const now = Date.now();
+  if (!(parseApStart(start).getTime() > now)) return false;
+  const list: any[] = (client.reminderPrefs || []).map((mins: number) => ({
+    at: reminderAtBefore(start, mins),
+    kind: `${mins}m`,
+    sent: false,
+  }));
+  if (client.reminderMorning) list.push({ at: morningReminderAt(start), kind: 'morning', sent: false });
+  const future = list.filter((r) => new Date(r.at).getTime() > now);
+  if (!future.length) return false;
+  ap.reminders = future;
+  ap.updatedAt = new Date().toISOString();
+  return true;
+}
+
 export async function processDueReminders(crm: Crm, send = sendMessage): Promise<{ sent: number; crm: Crm }> {
   const token = crm.settings?.telegramToken;
   if (!token) return { sent: 0, crm };
@@ -2208,7 +2238,8 @@ export async function processDueReminders(crm: Crm, send = sendMessage): Promise
       const when = new Date(r.at).getTime();
       if (!Number.isFinite(when) || when > now) continue;
       if (!chat) {
-        r.sent = true;
+        // Client not linked to Telegram yet: keep it pending — it goes out once they link
+        // (before the visit; past visits are closed above and never get late reminders).
         continue;
       }
       const svc = (crm.services || []).find((x) => a.serviceIds?.includes(x.id));
