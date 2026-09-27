@@ -154,6 +154,15 @@ export function BookingSheet({
     };
   }, [serviceIds, state.services]);
 
+  const pricedSelection = useMemo(() => {
+    const items = serviceIds
+      .map((id) => state.services.find((s) => s.id === id))
+      .filter((s): s is NonNullable<typeof s> => !!s)
+      .map((s) => ({ id: s.id, name: s.name, price: rub(s.price) ? Math.round(Number(s.price)) : 0 }));
+    const total = items.reduce((sum, x) => sum + x.price, 0);
+    return { items, total };
+  }, [serviceIds, state.services]);
+
   const duration = mode?.kind === 'window' ? winDur : durationMin;
 
   const dateOptions = useMemo(() => {
@@ -369,6 +378,7 @@ export function BookingSheet({
         clientName: name.trim(),
         clientPhone: nPhone,
         serviceNames: svcNames || 'Услуга',
+        totalPrice: pricedSelection.total,
         startISO: base.start,
         durationMin: base.durationMin,
         source: 'journal',
@@ -512,6 +522,9 @@ export function BookingSheet({
                         {servicesSummary.extra > 0 ? (
                           <span className="text-gray-500"> · ещё {servicesSummary.extra}</span>
                         ) : null}
+                        {pricedSelection.total > 0 && (
+                          <span className="text-gray-900 font-semibold"> · {rub(pricedSelection.total)}</span>
+                        )}
                       </span>
                     )}
                   </button>
@@ -529,9 +542,23 @@ export function BookingSheet({
                             : 'border-gray-200 bg-white',
                         )}
                       >
-                        {s.name} · {s.durationMin}м
+                        {s.name} · {s.durationMin}м{rub(s.price) ? ` · ${rub(s.price)}` : ''}
                       </button>
                     ))}
+                  </div>
+                )}
+                {pricedSelection.items.length > 0 && pricedSelection.total > 0 && (
+                  <div className="mt-2 rounded-xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm" data-testid="price-summary">
+                    {pricedSelection.items.map((x) => (
+                      <div key={x.id} className="flex justify-between gap-3 text-gray-700">
+                        <span className="truncate">{x.name}</span>
+                        <span className="tabular-nums whitespace-nowrap">{x.price ? rub(x.price) : ''}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between gap-3 mt-1 pt-1 border-t border-gray-200 font-semibold text-gray-900">
+                      <span>Итого:</span>
+                      <span className="tabular-nums whitespace-nowrap">{rub(pricedSelection.total)}</span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -810,6 +837,12 @@ function sensibleStart(from: Date): Date {
     if (cand < plan.end) return cand;
   }
   return up;
+}
+
+/** «1 500 ₽»; empty for missing/zero/invalid price. */
+function rub(price: unknown): string {
+  const n = Number(price);
+  return Number.isFinite(n) && n > 0 ? `${Math.round(n).toLocaleString('ru-RU')} ₽` : '';
 }
 
 function toLocalInput(d: Date) {

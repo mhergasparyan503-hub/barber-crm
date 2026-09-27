@@ -305,6 +305,18 @@ function upcomingAppointmentsAll(crm: Crm) {
     .sort((a, b) => +parseApStart(apStart(a)) - +parseApStart(apStart(b)));
 }
 
+/** Master-only: total price of the visit's services, «1 500 ₽» (services without price are skipped). */
+function apptTotalRub(crm: Crm, a: any): string {
+  const total = (a?.serviceIds || []).reduce((sum: number, id: string) => {
+    const n = Number(crm.services?.find((s) => s.id === id)?.price);
+    return sum + (Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
+  }, 0);
+  return total > 0 ? `${total.toLocaleString('ru-RU')} ₽` : '';
+}
+function apptServiceNames(crm: Crm, a: any): string {
+  return (a?.serviceIds || []).map((id: string) => crm.services?.find((s) => s.id === id)?.name).filter(Boolean).join(', ');
+}
+
 function formatOwnerApptBlock(crm: Crm, a: any, index: number): string {
   const c = crm.clients.find((x) => x.id === a.clientId);
   const svc = crm.services.find((s) => a.serviceIds?.includes(s.id));
@@ -315,8 +327,9 @@ function formatOwnerApptBlock(crm: Crm, a: any, index: number): string {
   return (
     `${index}. ${c?.name || 'Клиент'}\n` +
     `📞 ${c?.phone || '—'}\n` +
-    `✂️ ${svc?.name || 'услуга'}\n` +
-    `🗓 ${when}`
+    `✂️ ${apptServiceNames(crm, a) || svc?.name || 'услуга'}\n` +
+    `🗓 ${when}` +
+    (apptTotalRub(crm, a) ? `\n💰 ${apptTotalRub(crm, a)}` : '')
   );
 }
 
@@ -1942,6 +1955,7 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
     const summary =
       `Клиент записан.\n\n${client.name || 'Клиент'}\n${client.phone || '—'}\n` +
       `${svc?.name || 'услуга'}\n${draft.day} в ${draft.time}\n${svc?.durationMin || 45} мин` +
+      (apptTotalRub(crm, ap) ? `\nИтого: ${apptTotalRub(crm, ap)}` : '') +
       (!clientTg && crm.settings?.telegramBotUsername
         ? `\n\nСсылка для клиента (откроет бота с его записью и напоминаниями):\nhttps://t.me/${String(crm.settings.telegramBotUsername).replace(/^@/, '')}?start=v_${ap.id}`
         : '');
@@ -2116,7 +2130,8 @@ export async function notifyOwner(token: string, crm: Crm, ap: any, client: any,
   if (!owner) return;
   const sid = ap.id.slice(-10);
   const when = mskParts(parseApStart(apStart(ap)));
-  const text = `${title}\n\n${client?.name || 'Клиент'}\n${client?.phone || '—'}\n${svc?.name || 'услуга'}\n${when.date} ${when.time}\n${ap.durationMin} мин`;
+  const total = apptTotalRub(crm, ap);
+  const text = `${title}\n\n${client?.name || 'Клиент'}\n${client?.phone || '—'}\n${apptServiceNames(crm, ap) || svc?.name || 'услуга'}\n${when.date} ${when.time}\n${ap.durationMin} мин${total ? `\nИтого: ${total}` : ''}`;
   await sendMessage(
     token,
     owner,

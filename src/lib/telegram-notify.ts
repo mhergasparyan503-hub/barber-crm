@@ -12,6 +12,8 @@ export function notifyOwnerNewVisit(
     serviceNames: string;
     startISO: string;
     durationMin: number;
+    /** Sum of service prices, ₽ (0 = unknown, not shown). */
+    totalPrice?: number;
     source: 'online' | 'journal' | 'telegram';
   },
 ) {
@@ -33,6 +35,7 @@ export function notifyOwnerNewVisit(
         ? 'Новая запись'
         : 'Новая запись в журнале';
   let text = `${title}\n\n${opts.clientName}\n${opts.clientPhone}\n${opts.serviceNames}\n${when}\n${opts.durationMin} мин`;
+  if (opts.totalPrice && opts.totalPrice > 0) text += `\nИтого: ${Math.round(opts.totalPrice).toLocaleString('ru-RU')} ₽`;
   const bot = (state.settings.telegramBotUsername || '').replace(/^@/, '');
   if (opts.source !== 'telegram' && bot && /^[A-Za-z0-9_-]{1,60}$/.test(String(opts.appointmentId))) {
     text +=
