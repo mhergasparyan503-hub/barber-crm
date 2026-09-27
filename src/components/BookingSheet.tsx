@@ -13,6 +13,7 @@ import { cn } from '@/lib/cn';
 import type { Appointment } from '@/lib/types';
 import { notifyOwnerNewVisit } from '@/lib/telegram-notify';
 import { scheduleFlush, flushNow } from '@/lib/crm-snapshot';
+import { rub, visitPrice } from '@/lib/price';
 import { WheelPicker, buildRangeOptions, type WheelOption } from './WheelPicker';
 
 const DURATION_STEP = 15; // match settings.slotMinutes / service steps
@@ -154,14 +155,7 @@ export function BookingSheet({
     };
   }, [serviceIds, state.services]);
 
-  const pricedSelection = useMemo(() => {
-    const items = serviceIds
-      .map((id) => state.services.find((s) => s.id === id))
-      .filter((s): s is NonNullable<typeof s> => !!s)
-      .map((s) => ({ id: s.id, name: s.name, price: rub(s.price) ? Math.round(Number(s.price)) : 0 }));
-    const total = items.reduce((sum, x) => sum + x.price, 0);
-    return { items, total };
-  }, [serviceIds, state.services]);
+  const pricedSelection = useMemo(() => visitPrice(state.services, serviceIds), [serviceIds, state.services]);
 
   const duration = mode?.kind === 'window' ? winDur : durationMin;
 
@@ -837,12 +831,6 @@ function sensibleStart(from: Date): Date {
     if (cand < plan.end) return cand;
   }
   return up;
-}
-
-/** «1 500 ₽»; empty for missing/zero/invalid price. */
-function rub(price: unknown): string {
-  const n = Number(price);
-  return Number.isFinite(n) && n > 0 ? `${Math.round(n).toLocaleString('ru-RU')} ₽` : '';
 }
 
 function toLocalInput(d: Date) {

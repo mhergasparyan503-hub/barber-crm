@@ -15,6 +15,7 @@ import { getDayPlan } from '@/lib/schedule';
 import { WEEKDAY_SHORT } from '@/lib/format';
 import { telHref, smsHref } from '@/lib/phone';
 import { hasConflict } from '@/lib/slots';
+import { rub, visitPrice } from '@/lib/price';
 import { cn } from '@/lib/cn';
 import type { BookingMode } from './BookingSheet';
 import { mskDateKey, mskDow, parseApStart } from '@/lib/msk';
@@ -460,8 +461,11 @@ export function Journal({
                     setMenu({ x: e.clientX, y: e.clientY, appointmentId: a.id });
                   }}
                 >
-                  <div className="text-[11px] font-semibold leading-tight">
-                    {showTime} · {client?.name || 'Клиент'}
+                  <div className="text-[11px] font-semibold leading-tight flex gap-1">
+                    <span className="truncate flex-1 min-w-0">{showTime} · {client?.name || 'Клиент'}</span>
+                    {visitPrice(state.services, a.serviceIds).total > 0 && (
+                      <span className="shrink-0 tabular-nums opacity-95">{rub(visitPrice(state.services, a.serviceIds).total)}</span>
+                    )}
                   </div>
                   {a.durationMin >= 30 && (
                     <div className="text-[10px] opacity-90 truncate">
@@ -523,6 +527,11 @@ export function Journal({
             }}
             onClick={(e) => e.stopPropagation()}
           >
+            {visitPrice(state.services, menuAppt.serviceIds).total > 0 && (
+              <div className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100">
+                {menuClient.name} · <span className="font-semibold text-gray-900">{rub(visitPrice(state.services, menuAppt.serviceIds).total)}</span>
+              </div>
+            )}
             <a href={telHref(menuClient.phone)} className="block px-4 py-2.5 text-sm hover:bg-gray-50">
               Позвонить
             </a>

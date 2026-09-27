@@ -1,15 +1,19 @@
+import { useMemo } from 'react';
 import { Link, useParams } from '@tanstack/react-router';
 import { ArrowLeft, Phone, MessageSquare } from 'lucide-react';
 import { useCrm } from '@/lib/store';
 import { formatPhoneDisplay, telHref, smsHref } from '@/lib/phone';
 import { formatVisitWhen } from '@/lib/format';
 import { useBooking } from '@/components/BookingContext';
+import { rub, visitPrice } from '@/lib/price';
 
 export function ClientDetailPage() {
   const params = useParams({ strict: false }) as { id?: string };
   const id = params.id || '';
   const client = useCrm((s) => s.clients.find((c) => c.id === id));
-  const appointments = useCrm((s) => s.appointments.filter((a) => a.clientId === id));
+  // Select the stable array, filter outside: a selector returning a new array each time loops forever (React #185).
+  const allAppointments = useCrm((s) => s.appointments);
+  const appointments = useMemo(() => allAppointments.filter((a) => a.clientId === id), [allAppointments, id]);
   const services = useCrm((s) => s.services);
   const { open } = useBooking();
 
@@ -29,7 +33,7 @@ export function ClientDetailPage() {
   const total = done.reduce((sum, a) => {
     return (
       sum +
-      a.serviceIds.reduce((s, sid) => s + (services.find((x) => x.id === sid)?.price || 0), 0)
+      visitPrice(services, a.serviceIds).total
     );
   }, 0);
 
@@ -76,7 +80,10 @@ export function ClientDetailPage() {
               <li key={a.id} className="text-sm border-b border-gray-50 pb-2">
                 <div className="font-medium first-letter:uppercase">{formatVisitWhen(a.start).full}</div>
                 <div className="text-gray-500">
-                  {a.serviceIds.map((sid) => services.find((s) => s.id === sid)?.name).filter(Boolean).join(', ')}
+                  {visitPrice(services, a.serviceIds).items.map((x) => (x.price ? `${x.name} ${rub(x.price)}` : x.name)).join(', ')}
+                  {visitPrice(services, a.serviceIds).items.length > 1 && visitPrice(services, a.serviceIds).total > 0
+                    ? ` · Итого: ${rub(visitPrice(services, a.serviceIds).total)}`
+                    : ''}
                   {a.status === 'cancelled' ? ' · отмена' : ''}
                 </div>
               </li>

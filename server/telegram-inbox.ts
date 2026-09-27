@@ -290,7 +290,8 @@ async function showOwnerToday(token: string, chatId: string, crm: Crm) {
       const c = crm.clients.find((x) => x.id === a.clientId);
       const svc = crm.services.find((s) => a.serviceIds?.includes(s.id));
       const p = mskParts(parseApStart(apStart(a)));
-      return `• ${p.time} — ${c?.name || 'Клиент'} · ${svc?.name || 'услуга'} · ${c?.phone || '—'}`;
+      const total = apptTotalRub(crm, a);
+      return `• ${p.time} — ${c?.name || 'Клиент'} · ${apptServiceNames(crm, a) || svc?.name || 'услуга'}${total ? ` · ${total}` : ''} · ${c?.phone || '—'}`;
     })
     .join('\n');
   await sendMessage(token, chatId, `Сегодня ${today}:\n${lines}`, ownerReplyKeyboard());
@@ -306,15 +307,19 @@ function upcomingAppointmentsAll(crm: Crm) {
 }
 
 /** Master-only: total price of the visit's services, «1 500 ₽» (services without price are skipped). */
+function svcByRef(crm: Crm, ref: string) {
+  const k = String(ref || '').trim().toLowerCase();
+  return crm.services?.find((s) => s.id === ref) || crm.services?.find((s) => String(s.name || '').trim().toLowerCase() === k);
+}
 function apptTotalRub(crm: Crm, a: any): string {
   const total = (a?.serviceIds || []).reduce((sum: number, id: string) => {
-    const n = Number(crm.services?.find((s) => s.id === id)?.price);
+    const n = Number(svcByRef(crm, id)?.price);
     return sum + (Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
   }, 0);
   return total > 0 ? `${total.toLocaleString('ru-RU')} ₽` : '';
 }
 function apptServiceNames(crm: Crm, a: any): string {
-  return (a?.serviceIds || []).map((id: string) => crm.services?.find((s) => s.id === id)?.name).filter(Boolean).join(', ');
+  return (a?.serviceIds || []).map((id: string) => svcByRef(crm, id)?.name).filter(Boolean).join(', ');
 }
 
 function formatOwnerApptBlock(crm: Crm, a: any, index: number): string {
@@ -756,7 +761,8 @@ async function performClientCancel(token: string, chatId: string, crm: Crm) {
       (() => {
         const cl = crm.clients.find((c) => c.id === ap.clientId);
         const svc = crm.services.find((x) => ap.serviceIds?.includes(x.id));
-        return `❌ Клиент отменил запись\n\n${cl?.name || 'Клиент'}\n${cl?.phone || '—'}\n${svc?.name || 'услуга'}\n${when.date} ${when.time}`;
+        const total = apptTotalRub(crm, ap);
+        return `❌ Клиент отменил запись\n\n${cl?.name || 'Клиент'}\n${cl?.phone || '—'}\n${apptServiceNames(crm, ap) || svc?.name || 'услуга'}\n${when.date} ${when.time}${total ? `\nИтого: ${total}` : ''}`;
       })(),
     );
   }
