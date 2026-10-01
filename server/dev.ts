@@ -703,11 +703,11 @@ async function main() {
         if (!snap?.settings?.telegramToken) return;
         const prevSnap = clone(snap);
         const before = JSON.stringify(
-          (snap.appointments || []).map((a: any) => (a.reminders || []).map((r: any) => !!r.sent)),
+          (snap.appointments || []).map((a: any) => a.reminders || []),
         );
         const { sent, crm } = await processDueReminders(snap);
         const after = JSON.stringify(
-          (crm.appointments || []).map((a: any) => (a.reminders || []).map((r: any) => !!r.sent)),
+          (crm.appointments || []).map((a: any) => a.reminders || []),
         );
         if (sent > 0 || before !== after) {
           stampChanges(prevSnap, crm);

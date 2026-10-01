@@ -150,6 +150,7 @@ export function TelegramBridge() {
             telegramChatId: c.telegramChatId || u.telegramChatId,
             telegramUsername: c.telegramUsername || u.telegramUsername,
             reminderPrefs: c.reminderPrefs ?? u.reminderPrefs,
+            remindersOff: c.remindersOff ?? u.remindersOff,
             name: c.name || u.name,
             phone: c.phone || u.phone,
           };

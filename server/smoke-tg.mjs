@@ -727,7 +727,7 @@ Object.assign(crm, r.patch);
   // booking confirm (ReplyKeyboard) + always reminder picker
   assert(toClient.length === 2, 'confirm + reminder after book, got ' + toClient.length);
   assert(!toClient.some((m) => (m.text || '').includes('Управление записью')), 'no manage msg');
-  assert(toClient.some((m) => (m.text || '').includes('Поставить напоминание')), 'reminder ask after book');
+  assert(toClient.some((m) => /Поставить напоминание|Напоминание за 2 часа/.test(m.text || '')), 'reminder ask after book');
   console.log('OK confirm + reminder after booking');
 }
 
@@ -778,8 +778,8 @@ console.log('\nALL SMOKE PASSED');
   });
   Object.assign(crm, r.patch);
   const texts = g.__tgSent.map((m) => m.text || '').join('\n---\n');
-  assert(texts.includes('Поставить напоминание') || texts.includes('Когда напомнить'), 'returning → reminder prompt');
-  const remMsg = g.__tgSent.find((m) => (m.text || '').includes('Поставить напоминание') || (m.text || '').includes('Когда напомнить'));
+  assert(/Поставить напоминание|Напоминание за 2 часа/.test(texts) || texts.includes('Когда напомнить'), 'returning → reminder prompt');
+  const remMsg = g.__tgSent.find((m) => /Поставить напоминание|Напоминание за 2 часа/.test(m.text || '') || (m.text || '').includes('Когда напомнить'));
   assert(remMsg?.reply_markup?.inline_keyboard, 'reminder inline kb');
   const rflat = remMsg.reply_markup.inline_keyboard.flat().map((b) => b.text);
   assert(hasLabel(rflat, '15 мин') && hasLabel(rflat, 'Не напоминать'), 'reminder presets');
@@ -809,8 +809,8 @@ console.log('\nALL SMOKE PASSED');
   });
   Object.assign(crm, r.patch);
   const texts = g.__tgSent.map((m) => m.text || '').join('\n');
-  assert(texts.includes('Поставить напоминание'), 'first-timer gets reminder prompt');
-  const remMsg = g.__tgSent.find((m) => (m.text || '').includes('Поставить напоминание'));
+  assert(/Поставить напоминание|Напоминание за 2 часа/.test(texts), 'first-timer gets reminder prompt');
+  const remMsg = g.__tgSent.find((m) => /Поставить напоминание|Напоминание за 2 часа/.test(m.text || ''));
   assert(remMsg?.reply_markup?.inline_keyboard, 'first-timer reminder kb');
   console.log('OK first-time booking → reminder picker');
 }

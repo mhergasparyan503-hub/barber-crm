@@ -29,6 +29,8 @@ export interface Client {
   telegramUsername?: string;
   reminderPrefs?: number[];
   reminderMorning?: boolean;
+  /** Client pressed «Не напоминать» in the bot — no automatic 2 h reminder. */
+  remindersOff?: boolean;
   createdAt: string;
   /** Last change (ISO) — used to merge web and bot edits. */
   updatedAt?: string;
@@ -48,7 +50,7 @@ export interface Appointment {
   source: AppointmentSource;
   color?: string;
   telegramChatId?: string;
-  reminders?: { at: string; sent?: boolean; kind: string }[];
+  reminders?: { at: string; sent?: boolean; kind: string; auto?: boolean; asap?: boolean }[];
   createdAt: string;
   /** Last change (ISO) — used to merge web and bot edits. */
   updatedAt?: string;

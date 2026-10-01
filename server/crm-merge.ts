@@ -30,13 +30,14 @@ const ts = (x: any) => String(x?.updatedAt || '');
 
 function pickAppt(inc: any, prev: any): any {
   let chosen: any;
-  if (ts(prev) > ts(inc)) chosen = { ...prev };
+  const prevWins = ts(prev) > ts(inc);
+  if (prevWins) chosen = { ...prev };
   else {
     chosen = { ...inc };
     // Legacy rows without timestamps: never un-cancel a visit cancelled via the bot.
     if (!inc.updatedAt && !prev.updatedAt && prev.status === 'cancelled') chosen.status = 'cancelled';
   }
-  const other = chosen === inc ? prev : inc;
+  const other = prevWins ? inc : prev;
   chosen.reminders = mergeSent(chosen.reminders, other.reminders);
   // Same timestamp = neither side knows the other's edit: never drop reminders the other side has.
   if (ts(prev) === ts(inc) && other.reminders?.length) {
@@ -65,6 +66,7 @@ function pickClient(inc: any, prev: any): any {
     telegramUsername: newer.telegramUsername || older.telegramUsername,
     reminderPrefs: newer.reminderPrefs ?? older.reminderPrefs,
     reminderMorning: newer.reminderMorning ?? older.reminderMorning,
+    remindersOff: newer.remindersOff ?? older.remindersOff,
   };
 }
 

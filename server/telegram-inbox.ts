@@ -957,6 +957,7 @@ async function handleMessage(token: string, msg: any, crm: Crm) {
         }
         if (!ap.telegramChatId) ap.telegramChatId = chatId;
         applyClientReminderPrefs(crm, ap);
+        ensureAutoReminder(crm, ap, { onLink: true });
       }
       linkChat(crm, chatId, username, clientId);
       await sendClientMenu(token, chatId, crm, clientId);
@@ -1291,6 +1292,7 @@ function attachChatToClient(crm: Crm, client: any, chatId: string, username?: st
     if (a.clientId !== client.id || !isBookedStatus(a.status)) continue;
     if (parseApStart(apStart(a)).getTime() < now) continue;
     if (!a.telegramChatId) a.telegramChatId = chatId;
+    ensureAutoReminder(crm, a, { onLink: true });
   }
 }
 
@@ -1606,7 +1608,10 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
       { at, kind: `${mins}m`, sent: false },
     ];
     const client = crm.clients.find((c) => c.id === ap.clientId);
-    if (client) client.reminderPrefs = [...new Set([...(client.reminderPrefs || []), mins])];
+    if (client) {
+      client.reminderPrefs = [...new Set([...(client.reminderPrefs || []), mins])];
+      client.remindersOff = false;
+    }
     await sendMessage(token, chatId, 'Напоминание установлено.', reminderAfterSetKeyboard(sid));
     return;
   }
@@ -1622,7 +1627,10 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
       { at, kind: 'morning', sent: false },
     ];
     const client = crm.clients.find((c) => c.id === ap.clientId);
-    if (client) client.reminderMorning = true;
+    if (client) {
+      client.reminderMorning = true;
+      client.remindersOff = false;
+    }
     const sid = ap.id.slice(-10);
     await sendMessage(token, chatId, 'Напомню утром в день визита.', reminderAfterSetKeyboard(sid));
     return;
@@ -1635,6 +1643,7 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
       if (client) {
         client.reminderPrefs = [];
         client.reminderMorning = false;
+        client.remindersOff = true;
       }
     }
     await sendMessage(token, chatId, 'Напоминания отключены.', kb([[btn('📋 Меню', 'bk:menu')]]));
@@ -1945,6 +1954,7 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
     createdAt: new Date().toISOString(),
   };
   crm.appointments.push(ap);
+  const autoOn = ensureAutoReminder(crm, ap);
   setDraft(crm, chatId, {});
   if (!ownerMode) {
     await notifyOwner(token, crm, ap, client, svc, 'Новая запись');
@@ -1973,9 +1983,11 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
         : '');
     await sendMessage(token, chatId, summary, ownerReplyKeyboard());
     // Same reminder prompt as clients (delivery goes to client TG when linked; else skipped gracefully)
-    let prompt = 'Запись подтверждена. Поставить напоминание?';
+    let prompt = autoOn
+      ? 'Запись подтверждена. Клиенту придёт напоминание за 2 часа. Добавить ещё?'
+      : 'Запись подтверждена. Поставить напоминание?';
     if (!clientTg) {
-      prompt += '\n(У клиента нет Telegram в CRM — напоминание сохранится и отправится, когда привяжут чат.)';
+      prompt += '\n(У клиента нет Telegram в CRM — когда он откроет ссылку, ему придёт напоминание за 2 часа.)';
     } else if (prefs.length || client.reminderMorning) {
       prompt += '\n(Уже применены сохранённые настройки клиента — можно изменить.)';
     }
@@ -1985,7 +1997,9 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
   // One reply: ReplyKeyboard already has Перенести/Отменить/Напоминание when upcoming exists
   await sendMessage(token, chatId, text, clientReplyKeyboard(crm, chatId, client.id));
   // Always offer reminder picker (first-time and returning)
-  let prompt = 'Запись подтверждена. Поставить напоминание?';
+  let prompt = autoOn
+    ? 'Запись подтверждена. Напоминание за 2 часа уже включено. Добавить ещё?'
+    : 'Запись подтверждена. Поставить напоминание?';
   if (prefs.length || client.reminderMorning) {
     prompt += '\n(Уже применены ваши сохранённые настройки — можно изменить.)';
   }
@@ -2189,6 +2203,57 @@ function parseCustomReminder(text: string, start: string): number | null {
 }
 
 /** Server-side due-reminder delivery (production webhook has no browser TelegramBridge). */
+/** Everyone linked to the bot gets a reminder 2 h before the visit automatically. */
+export const AUTO_REMINDER_MIN = 120;
+const AUTO_KIND = `${AUTO_REMINDER_MIN}m`;
+/** Linked less than 2 h before the visit: one reminder right away, only if this much time is left. */
+const LINK_LATE_MIN_LEFT = 15;
+
+/**
+ * Add the automatic 2 h reminder to a visit of a linked client (no duplicates, keeps the client's own ones).
+ * Scheduled only when the visit is more than 2 h away. `onLink` (client just linked): if less than 2 h but
+ * more than 15 min remain, one reminder goes out right away; otherwise nothing.
+ * Clients who pressed «Не напоминать» (remindersOff) are skipped. Returns true if something changed.
+ */
+export function ensureAutoReminder(crm: Crm, ap: any, opts: { onLink?: boolean } = {}): boolean {
+  if (!ap || !isBookedStatus(ap.status)) return false;
+  const client = (crm.clients || []).find((c) => c.id === ap.clientId);
+  const chat = ap.telegramChatId || client?.telegramChatId;
+  if (!chat || client?.remindersOff) return false;
+  const start = apStart(ap);
+  const startMs = parseApStart(start).getTime();
+  const now = Date.now();
+  if (!Number.isFinite(startMs) || startMs <= now) return false;
+  const list: any[] = ap.reminders || [];
+  if (list.some((r) => r.kind === AUTO_KIND)) return false;
+  const at = reminderAtBefore(start, AUTO_REMINDER_MIN);
+  const atMs = new Date(at).getTime();
+  if (atMs > now + 60_000) {
+    ap.reminders = [...list, { at, kind: AUTO_KIND, sent: false, auto: true }];
+  } else if (opts.onLink && startMs - now > LINK_LATE_MIN_LEFT * 60_000) {
+    ap.reminders = [...list, { at: new Date(now).toISOString(), kind: AUTO_KIND, sent: false, auto: true, asap: true }];
+  } else {
+    return false;
+  }
+  ap.updatedAt = new Date().toISOString();
+  return true;
+}
+
+/** Safety net: an unsent automatic reminder follows the visit time; moved inside 2 h → silently dropped. */
+function syncAutoReminderTime(ap: any): boolean {
+  let changed = false;
+  for (const r of ap.reminders || []) {
+    if (!r.auto || r.asap || r.sent || r.kind !== AUTO_KIND) continue;
+    const at = reminderAtBefore(apStart(ap), AUTO_REMINDER_MIN);
+    if (new Date(at).getTime() !== new Date(r.at).getTime()) {
+      r.at = at;
+      if (new Date(at).getTime() <= Date.now()) r.sent = true;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /**
  * Client's saved reminder choices (set earlier in the bot / online) → reminders for a visit that has none
  * (e.g. booked by the master in the CRM). Skips reminder times already passed. Returns true if added.
@@ -2213,7 +2278,11 @@ export function applyClientReminderPrefs(crm: Crm, ap: any): boolean {
   return true;
 }
 
-export async function processDueReminders(crm: Crm, send = sendMessage): Promise<{ sent: number; crm: Crm }> {
+export async function processDueReminders(
+  crm: Crm,
+  send = sendMessage,
+  opts: { autoReminders?: boolean } = {},
+): Promise<{ sent: number; crm: Crm }> {
   const token = crm.settings?.telegramToken;
   if (!token) return { sent: 0, crm };
   const now = Date.now();
@@ -2224,6 +2293,10 @@ export async function processDueReminders(crm: Crm, send = sendMessage): Promise
 
   for (const a of crm.appointments || []) {
     if (a.status === 'cancelled') continue;
+    if (opts.autoReminders !== false) {
+      syncAutoReminderTime(a);
+      ensureAutoReminder(crm, a);
+    }
     const client = (crm.clients || []).find((c) => c.id === a.clientId);
     const chat = a.telegramChatId || client?.telegramChatId;
     const startMs = parseApStart(apStart(a)).getTime();
