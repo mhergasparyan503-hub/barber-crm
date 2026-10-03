@@ -180,11 +180,7 @@ const moreRoute = createRoute({
 const bookRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/book',
-  component: () => (
-    <div className="phone-shell">
-      <BookPage />
-    </div>
-  ),
+  component: BookPage,
 });
 
 const routeTree = rootRoute.addChildren([
