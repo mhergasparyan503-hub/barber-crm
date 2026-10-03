@@ -1835,7 +1835,10 @@ async function applyReschedule(token: string, chatId: string, crm: Crm, from?: a
   ap.reminders = shiftReminders(ap.reminders, oldStart, ap.start);
   // Never overwrite visit telegramChatId with owner chat
   const client = crm.clients.find((c) => c.id === ap.clientId);
-  await notifyOwner(token, crm, ap, client || { name: 'Клиент', phone: '' }, svc, 'Перенос записи');
+  // Master's own reschedules (owner flow / owner chat) don't notify the master.
+  if (!draft.ownerMove && !isOwnerChat(crm, chatId)) {
+    await notifyOwnerReschedule(token, crm, ap, client, oldStart);
+  }
   if (draft.ownerMove && client?.telegramChatId) {
     await sendMessage(
       token,
@@ -2149,6 +2152,38 @@ export function computeSlots(crm: Crm, staffId: string, day: string, durationMin
     cur += step;
   }
   return slots;
+}
+
+/** «🔄 Клиент перенёс запись» to the master: who, was → now, services, Итого. */
+function shortWhen(start: string): string {
+  const p = mskParts(parseApStart(start));
+  const [, m, d] = p.date.split('-');
+  const dow = new Date(`${p.date}T12:00:00+03:00`).getDay();
+  return `${['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][dow]}, ${d}.${m} в ${p.time}`;
+}
+
+export async function notifyOwnerReschedule(token: string, crm: Crm, ap: any, client: any, oldStart: string) {
+  const owner = crm.settings.telegramOwnerChatId;
+  if (!owner) return;
+  const sid = ap.id.slice(-10);
+  const total = apptTotalRub(crm, ap);
+  const svcNames = apptServiceNames(crm, ap) || crm.services.find((x) => ap.serviceIds?.includes(x.id))?.name || 'услуга';
+  const text =
+    `🔄 Клиент перенёс запись\n\n` +
+    `👤 ${client?.name || 'Клиент'}\n📞 ${client?.phone || '—'}\n\n` +
+    `Было: ${shortWhen(oldStart)}\n` +
+    `Стало: ${shortWhen(apStart(ap))}\n\n` +
+    `✂️ ${svcNames}\n⏱ ${ap.durationMin || 45} мин` +
+    (total ? `\nИтого: ${total}` : '');
+  await sendMessage(
+    token,
+    owner,
+    text,
+    kb([
+      [btn('❌ Отменить', `ow:cl:${sid}`), btn('🔁 Перенести', `ow:mv:${sid}`)],
+      [btn('✉️ Написать клиенту', `ow:msg:${sid}`)],
+    ]),
+  );
 }
 
 export async function notifyOwner(token: string, crm: Crm, ap: any, client: any, svc: any, title: string) {
