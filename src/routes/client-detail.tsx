@@ -6,6 +6,7 @@ import { formatPhoneDisplay, telHref, smsHref } from '@/lib/phone';
 import { formatVisitWhen } from '@/lib/format';
 import { useBooking } from '@/components/BookingContext';
 import { rub, visitPrice } from '@/lib/price';
+import { visitComment } from '@/lib/note';
 
 export function ClientDetailPage() {
   const params = useParams({ strict: false }) as { id?: string };
@@ -86,6 +87,9 @@ export function ClientDetailPage() {
                     : ''}
                   {a.status === 'cancelled' ? ' · отмена' : ''}
                 </div>
+                {visitComment(a) && (
+                  <div className="text-gray-600 whitespace-pre-wrap break-words">💬 {visitComment(a)}</div>
+                )}
               </li>
             ))}
           </ul>

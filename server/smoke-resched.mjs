@@ -33,6 +33,7 @@ await processDueReminders(crm, async () => ({ ok: true }));
 ok(ap().reminders?.some((r) => r.kind === '120m'), 'auto 2h reminder present');
 
 // 1) client reschedules in the bot → master notified
+ap().note = 'Борода покороче, виски 3 мм';
 g.__tgSent = [];
 await cb(111, 'bk:mv:resch0001');
 await cb(111, `bk:dy:${base}`);
@@ -46,6 +47,7 @@ console.log('---\n' + t + '\n---');
 ok(/🔄 Клиент перенёс запись/.test(t) && /Иван/.test(t) && /\+79990000001/.test(t), 'title, name, phone');
 ok(/Было: .*12:00/.test(t) && /Стало: .*15:00/.test(t), 'was → now');
 ok(/Мужская стрижка/.test(t) && /Итого: 2\s300/.test(t), 'service + Итого');
+ok(/💬 Борода покороче, виски 3 мм/.test(t), 'comment in master notice');
 const btns = toOwner[0].reply_markup.inline_keyboard.flat().map((b) => b.text).join('|');
 ok(/Отменить/.test(btns) && /Перенести/.test(btns) && /Написать клиенту/.test(btns), 'buttons: ' + btns);
 const r = ap().reminders.find((x) => x.kind === '120m');
@@ -68,4 +70,6 @@ await cb(111, 'bk:cly2');
 ok(ap().status === 'cancelled', 'cancelled');
 const c = g.__tgSent.filter((m) => m.chatId === '999');
 ok(c.length === 1 && /Клиент отменил запись/.test(c[0].text) && /Иван/.test(c[0].text) && /Итого/.test(c[0].text), 'master got cancel notice');
+const { commentLine } = await import('./telegram-inbox.ts');
+ok(commentLine({ note: 'Telegram' }) === '' && commentLine({ note: 'Онлайн-запись' }) === '', 'system labels are not shown as comments');
 console.log('ALL RESCHEDULE CHECKS PASSED');

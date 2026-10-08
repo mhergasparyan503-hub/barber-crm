@@ -14,6 +14,7 @@ import type { Appointment } from '@/lib/types';
 import { notifyOwnerNewVisit } from '@/lib/telegram-notify';
 import { scheduleFlush, flushNow } from '@/lib/crm-snapshot';
 import { rub, visitPrice } from '@/lib/price';
+import { visitComment } from '@/lib/note';
 import { WheelPicker, buildRangeOptions, type WheelOption } from './WheelPicker';
 
 const DURATION_STEP = 15; // match settings.slotMinutes / service steps
@@ -105,8 +106,8 @@ export function BookingSheet({
       setName(client0?.name || '');
       setServiceIds([...appt.serviceIds]);
       setStartLocal(toLocalInput(new Date(appt.start)));
-      setComment(appt.note || '');
-      setShowComment(!!appt.note);
+      setComment(visitComment(appt));
+      setShowComment(!!visitComment(appt));
       setDurationMin(appt.durationMin || 30);
       setServicesOpen(!(appt.serviceIds.length > 0));
     } else if (mode.kind === 'move' && appt) {
@@ -114,7 +115,8 @@ export function BookingSheet({
       setName(client0?.name || '');
       setServiceIds([...appt.serviceIds]);
       setStartLocal(toLocalInput(mode.start));
-      setComment(appt.note || '');
+      setComment(visitComment(appt));
+      setShowComment(!!visitComment(appt));
       setDurationMin(appt.durationMin || 30);
       setServicesOpen(!(appt.serviceIds.length > 0));
     } else if (mode.kind === 'window') {
@@ -354,7 +356,7 @@ export function BookingSheet({
       start: start.toISOString(),
       durationMin: duration,
       status: 'waiting',
-      note: comment || undefined,
+      note: comment.trim() || (appt?.note && !visitComment(appt) ? appt.note : undefined),
       source: appt?.source || 'journal',
       color: appt?.color || state.settings.visitColor,
       createdAt: appt?.createdAt || new Date().toISOString(),

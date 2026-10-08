@@ -767,7 +767,7 @@ async function performClientCancel(token: string, chatId: string, crm: Crm) {
         const cl = crm.clients.find((c) => c.id === ap.clientId);
         const svc = crm.services.find((x) => ap.serviceIds?.includes(x.id));
         const total = apptTotalRub(crm, ap);
-        return `❌ Клиент отменил запись\n\n${cl?.name || 'Клиент'}\n${cl?.phone || '—'}\n${apptServiceNames(crm, ap) || svc?.name || 'услуга'}\n${when.date} ${when.time}${total ? `\nИтого: ${total}` : ''}`;
+        return `❌ Клиент отменил запись\n\n${cl?.name || 'Клиент'}\n${cl?.phone || '—'}\n${apptServiceNames(crm, ap) || svc?.name || 'услуга'}\n${when.date} ${when.time}${total ? `\nИтого: ${total}` : ''}${commentLine(ap)}`;
       })(),
     );
   }
@@ -2154,6 +2154,14 @@ export function computeSlots(crm: Crm, staffId: string, day: string, durationMin
   return slots;
 }
 
+const SYSTEM_NOTES = new Set(['Онлайн-запись', 'Telegram', 'Telegram (мастер)']);
+/** Real visit comment (not the bot/online system label) as an extra line for master notices. */
+export function commentLine(ap: any): string {
+  const n = String(ap?.note || '').trim();
+  if (!n || SYSTEM_NOTES.has(n)) return '';
+  return `\n💬 ${n.length > 300 ? n.slice(0, 300) + '…' : n}`;
+}
+
 /** «🔄 Клиент перенёс запись» to the master: who, was → now, services, Итого. */
 function shortWhen(start: string): string {
   const p = mskParts(parseApStart(start));
@@ -2174,7 +2182,8 @@ export async function notifyOwnerReschedule(token: string, crm: Crm, ap: any, cl
     `Было: ${shortWhen(oldStart)}\n` +
     `Стало: ${shortWhen(apStart(ap))}\n\n` +
     `✂️ ${svcNames}\n⏱ ${ap.durationMin || 45} мин` +
-    (total ? `\nИтого: ${total}` : '');
+    (total ? `\nИтого: ${total}` : '') +
+    commentLine(ap);
   await sendMessage(
     token,
     owner,
@@ -2192,7 +2201,7 @@ export async function notifyOwner(token: string, crm: Crm, ap: any, client: any,
   const sid = ap.id.slice(-10);
   const when = mskParts(parseApStart(apStart(ap)));
   const total = apptTotalRub(crm, ap);
-  const text = `${title}\n\n${client?.name || 'Клиент'}\n${client?.phone || '—'}\n${apptServiceNames(crm, ap) || svc?.name || 'услуга'}\n${when.date} ${when.time}\n${ap.durationMin} мин${total ? `\nИтого: ${total}` : ''}`;
+  const text = `${title}\n\n${client?.name || 'Клиент'}\n${client?.phone || '—'}\n${apptServiceNames(crm, ap) || svc?.name || 'услуга'}\n${when.date} ${when.time}\n${ap.durationMin} мин${total ? `\nИтого: ${total}` : ''}${commentLine(ap)}`;
   await sendMessage(
     token,
     owner,

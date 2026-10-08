@@ -16,6 +16,7 @@ import { WEEKDAY_SHORT } from '@/lib/format';
 import { telHref, smsHref } from '@/lib/phone';
 import { hasConflict } from '@/lib/slots';
 import { rub, visitPrice } from '@/lib/price';
+import { visitComment } from '@/lib/note';
 import { cn } from '@/lib/cn';
 import type { BookingMode } from './BookingSheet';
 import { mskDateKey, mskDow, parseApStart } from '@/lib/msk';
@@ -433,6 +434,10 @@ export function Journal({
               const origTop = (minFromTop(s) / 60) * PX_PER_HOUR;
               const isDragging = dragPreview?.id === a.id;
               const top = isDragging ? dragPreview!.topPx : origTop;
+              const comment = visitComment(a);
+              const blockH = Math.max(24, (a.durationMin / 60) * PX_PER_HOUR);
+              // Room for a 3rd line (time·name / services / 💬) only on taller blocks; short ones get a 💬 mark.
+              const commentLine = !!comment && blockH >= 44;
               const showTime = isDragging && gridStart
                 ? format(addMinutes(gridStart, dragPreview!.mins), 'HH:mm')
                 : format(s, 'HH:mm');
@@ -445,7 +450,7 @@ export function Journal({
                   )}
                   style={{
                     top,
-                    height: Math.max(24, (a.durationMin / 60) * PX_PER_HOUR),
+                    height: blockH,
                     background: color,
                     touchAction: 'none',
                     opacity: isDragging ? 0.95 : 1,
@@ -455,6 +460,11 @@ export function Journal({
                   onPointerMove={(e) => onCardPointerMove(e, a.id)}
                   onPointerUp={() => onCardPointerUp(a.id)}
                   onPointerCancel={() => onCardPointerCancel(a.id)}
+                  // The card opens on pointerup; stop the follow-up compat click from landing inside the
+                  // freshly opened sheet (it used to toggle a service under the finger).
+                  onTouchEnd={(e) => {
+                    if (e.cancelable) e.preventDefault();
+                  }}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     // Secondary: long-press context menu via right-click / two-finger (desktop)
@@ -463,6 +473,11 @@ export function Journal({
                 >
                   <div className="text-[11px] font-semibold leading-tight flex gap-1">
                     <span className="truncate flex-1 min-w-0">{showTime} · {client?.name || 'Клиент'}</span>
+                    {comment && !commentLine && (
+                      <span className="shrink-0" title={comment} aria-label="Есть комментарий">
+                        💬
+                      </span>
+                    )}
                     {visitPrice(state.services, a.serviceIds).total > 0 && (
                       <span className="shrink-0 tabular-nums opacity-95">{rub(visitPrice(state.services, a.serviceIds).total)}</span>
                     )}
@@ -473,6 +488,11 @@ export function Journal({
                         .map((id) => state.services.find((sv) => sv.id === id)?.name)
                         .filter(Boolean)
                         .join(', ')}
+                    </div>
+                  )}
+                  {commentLine && (
+                    <div className="text-[10px] leading-tight opacity-95 truncate" title={comment}>
+                      💬 {comment}
                     </div>
                   )}
                   {isDragging && (
@@ -523,13 +543,24 @@ export function Journal({
             className="absolute bg-white rounded-xl shadow-xl border border-gray-100 py-1 w-44"
             style={{
               left: Math.min(menu.x, window.innerWidth - 180),
-              top: Math.min(menu.y, window.innerHeight - 220),
+              top: Math.max(8, Math.min(menu.y, window.innerHeight - (visitComment(menuAppt) ? 340 : 240))),
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {visitPrice(state.services, menuAppt.serviceIds).total > 0 && (
+            {(visitPrice(state.services, menuAppt.serviceIds).total > 0 || visitComment(menuAppt)) && (
               <div className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100">
-                {menuClient.name} · <span className="font-semibold text-gray-900">{rub(visitPrice(state.services, menuAppt.serviceIds).total)}</span>
+                <div>
+                  {menuClient.name}
+                  {visitPrice(state.services, menuAppt.serviceIds).total > 0 && (
+                    <>
+                      {' · '}
+                      <span className="font-semibold text-gray-900">{rub(visitPrice(state.services, menuAppt.serviceIds).total)}</span>
+                    </>
+                  )}
+                </div>
+                {visitComment(menuAppt) && (
+                  <div className="mt-1 text-gray-700 whitespace-pre-wrap break-words line-clamp-4">💬 {visitComment(menuAppt)}</div>
+                )}
               </div>
             )}
             <a href={telHref(menuClient.phone)} className="block px-4 py-2.5 text-sm hover:bg-gray-50">
