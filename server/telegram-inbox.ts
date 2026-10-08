@@ -1118,6 +1118,14 @@ async function handleMessage(token: string, msg: any, crm: Crm) {
 
   // Collect name / phone for new booking
   const draft = getDraft(crm, chatId);
+  if (draft.await === 'comment' && text && !text.startsWith('/')) {
+    const comment = cleanComment(text);
+    const d = { ...draft, comment: comment || undefined };
+    delete d.await;
+    setDraft(crm, chatId, d);
+    await sendBookConfirm(token, chatId, crm, d);
+    return;
+  }
   if (draft.await === 'name' && text && !text.startsWith('/')) {
     setDraft(crm, chatId, { ...draft, name: text.slice(0, 80), await: 'phone' });
     await sendMessage(token, chatId, 'Укажите телефон (+7…):');
@@ -1488,12 +1496,30 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
       return;
     }
 
-    await sendMessage(
-      token,
-      chatId,
-      `Подтвердите запись:\n\n${svc?.name || 'услуга'}\n${draft.day} в ${time}\n${svc?.durationMin || 45} мин`,
-      kb([[btn('✅ Подтвердить', 'bk:cf'), btn('❌ Отмена', 'bk:x')]]),
-    );
+    // Client booking: one optional step — comment for the master (owner books without it).
+    if (!draft.ownerBook && !isOwnerChat(crm, chatId)) {
+      setDraft(crm, chatId, { ...draft, await: 'comment', comment: undefined });
+      await sendMessage(
+        token,
+        chatId,
+        'Хотите оставить комментарий мастеру?\nНапишите его одним сообщением — например, пожелания к стрижке. Или нажмите «Пропустить».',
+        kb([[btn('⏭ Пропустить', 'bk:nc')]]),
+      );
+      return;
+    }
+    await sendBookConfirm(token, chatId, crm, draft);
+    return;
+  }
+  if (data === 'bk:nc') {
+    const draft = getDraft(crm, chatId);
+    if (!draft.day || !draft.time || !draft.serviceId) {
+      await sendMessage(token, chatId, 'Черновик записи устарел. Начните снова.', kb([[btn('📅 Записаться', 'bk:go')]]));
+      return;
+    }
+    const d = { ...draft };
+    delete d.await;
+    setDraft(crm, chatId, d);
+    await sendBookConfirm(token, chatId, crm, d);
     return;
   }
   if (data === 'bk:cf') {
@@ -1811,6 +1837,30 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
   }
 }
 
+/** Client comment: plain text, no control chars, ≤300 chars (messages go out without parse_mode). */
+export function cleanComment(raw: unknown): string {
+  return String(raw ?? '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F\u200B-\u200F\u2028\u2029\uFEFF]/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 300)
+    .trim();
+}
+
+async function sendBookConfirm(token: string, chatId: string, crm: Crm, draft: any) {
+  const svc = crm.services.find((s) => s.id === draft.serviceId);
+  await sendMessage(
+    token,
+    chatId,
+    `Подтвердите запись:\n\n${svc?.name || 'услуга'}\n${draft.day} в ${draft.time}\n${svc?.durationMin || 45} мин` +
+      (draft.comment ? `\n\n💬 ${draft.comment}` : ''),
+    kb([[btn('✅ Подтвердить', 'bk:cf'), btn('❌ Отмена', 'bk:x')]]),
+  );
+}
+
 async function applyReschedule(token: string, chatId: string, crm: Crm, from?: any) {
   const draft = getDraft(crm, chatId);
   const ap = findBySuffix(crm.appointments, draft.ignoreId) || crm.appointments.find((a) => a.id === draft.apId);
@@ -1948,7 +1998,8 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
     start: startIso,
     durationMin: svc?.durationMin || 45,
     status: 'waiting',
-    note: ownerMode ? 'Telegram (мастер)' : 'Telegram',
+    origin: ownerMode ? 'Telegram (мастер)' : 'Telegram',
+    note: (!ownerMode && cleanComment(draft.comment)) || undefined,
     source: 'telegram',
     // Owner-mode: only client's chat (if any) — never master's chatId
     telegramChatId: ownerMode ? clientTg : chatId,

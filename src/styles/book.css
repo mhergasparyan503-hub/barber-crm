@@ -788,3 +788,24 @@ body.bk-body {
     border-color: #6a513f;
   }
 }
+
+/* optional client comment */
+.bk-ta-wrap {
+  position: relative;
+}
+.bk-root .bk-ta {
+  height: auto;
+  min-height: 92px;
+  padding: 13px 16px;
+  line-height: 1.4;
+  font-size: 16px;
+  resize: none;
+  display: block;
+}
+.bk-ta-cnt {
+  position: absolute;
+  right: 12px;
+  bottom: 22px;
+  font-size: 11px;
+  color: var(--mut);
+}

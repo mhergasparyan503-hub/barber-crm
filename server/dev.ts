@@ -12,6 +12,7 @@ import {
   findClientsByPhone,
   staffIdOf,
   applyClientReminderPrefs,
+  cleanComment,
 } from './telegram-inbox';
 import { claimUpdateId } from './tg-dedup';
 import { withCrmLock, mergeIncoming, stampChanges, publicView } from './crm-merge';
@@ -326,7 +327,8 @@ async function main() {
         start: startISO,
         durationMin: svc.durationMin,
         status: 'waiting',
-        note: 'Онлайн-запись',
+        origin: 'Онлайн-запись',
+        note: cleanComment(b?.comment) || undefined,
         source: 'online',
         color: snap.settings.onlineColor,
         telegramChatId: client.telegramChatId || undefined,

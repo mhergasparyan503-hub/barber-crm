@@ -129,6 +129,7 @@ export function BookPage() {
   const [slot, setSlot] = useState('');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const [comment, setComment] = useState('');
   const [error, setError] = useState('');
   const [selectedReminders, setSelectedReminders] = useState<string[]>([]);
   const [customText, setCustomText] = useState('');
@@ -281,6 +282,7 @@ export function BookPage() {
           time: slot,
           name: name.trim(),
           phone: nPhone,
+          comment: comment.trim() || undefined,
           reminders: selectedReminders,
           customMins: customMins ?? undefined,
         }),
@@ -590,6 +592,22 @@ export function BookPage() {
               }}
             />
 
+            <label className="bk-lbl" htmlFor="bk-comment">
+              Комментарий (необязательно)
+            </label>
+            <div className="bk-ta-wrap">
+              <textarea
+                id="bk-comment"
+                className="bk-inp bk-ta"
+                placeholder="Пожелания к стрижке, вопрос мастеру…"
+                maxLength={300}
+                rows={3}
+                value={comment}
+                onChange={(e) => setComment(e.target.value.slice(0, 300))}
+              />
+              {comment.length > 200 && <span className="bk-ta-cnt">{comment.length}/300</span>}
+            </div>
+
             <div className="bk-remind">
               <div className="bk-remind-t">🔔 Напомним за 2 часа до визита</div>
               <div className="bk-remind-s">
@@ -696,6 +714,7 @@ export function BookPage() {
                   setDay('');
                   setSlot('');
                   setSelectedReminders([]);
+                  setComment('');
                   setCustomText('');
                   setShowCustom(false);
                   setBookedId('');

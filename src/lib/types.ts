@@ -47,6 +47,8 @@ export interface Appointment {
   /** booked → waiting; cancelled → cancelled */
   status: VisitStatus;
   note?: string;
+  /** Where the visit came from (bot / online) — internal marker, not a comment. */
+  origin?: string;
   source: AppointmentSource;
   color?: string;
   telegramChatId?: string;

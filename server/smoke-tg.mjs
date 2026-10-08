@@ -162,8 +162,16 @@ r = await handleUpdate(crm, {
   },
 });
 Object.assign(crm, r.patch);
-assert(last().text.includes('Подтвердите'), 'confirm step');
-console.log('OK time → confirm');
+assert(last().text.includes('комментарий мастеру'), 'optional comment step');
+assert(last().reply_markup.inline_keyboard.flat().some((b) => b.callback_data === 'bk:nc'), 'skip button');
+console.log('OK time → comment step');
+r = await handleUpdate(crm, {
+  update_id: 70,
+  callback_query: { id: 'cq3s', data: 'bk:nc', from: { first_name: 'Иван' }, message: { chat: { id: 111 } } },
+});
+Object.assign(crm, r.patch);
+assert(last().text.includes('Подтвердите') && !last().text.includes('💬'), 'confirm step');
+console.log('OK skip → confirm');
 
 r = await handleUpdate(crm, {
   update_id: 8,
@@ -450,7 +458,7 @@ r = await handleUpdate(crm, {
 Object.assign(crm, r.patch);
 assert(crm.appointments.length === apCountBefore + 1, 'owner booking created appointment');
 const owAp = crm.appointments[crm.appointments.length - 1];
-assert(owAp.note.includes('мастер') || owAp.source === 'telegram', 'owner booking note/source');
+assert(owAp.origin === 'Telegram (мастер)' && !owAp.note, 'owner booking note/source');
 assert(String(owAp.telegramChatId || '') !== '999', 'owner chat not stored as visit TG');
 const owClient = crm.clients.find((c) => c.id === owAp.clientId);
 assert(owClient, 'owner booking client exists');
