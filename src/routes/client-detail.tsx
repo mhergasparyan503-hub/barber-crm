@@ -34,7 +34,7 @@ export function ClientDetailPage() {
   const total = done.reduce((sum, a) => {
     return (
       sum +
-      visitPrice(services, a.serviceIds).total
+      visitPrice(services, a.serviceIds, a.qty).total
     );
   }, 0);
 
@@ -81,9 +81,9 @@ export function ClientDetailPage() {
               <li key={a.id} className="text-sm border-b border-gray-50 pb-2">
                 <div className="font-medium first-letter:uppercase">{formatVisitWhen(a.start).full}</div>
                 <div className="text-gray-500">
-                  {visitPrice(services, a.serviceIds).items.map((x) => (x.price ? `${x.name} ${rub(x.price)}` : x.name)).join(', ')}
-                  {visitPrice(services, a.serviceIds).items.length > 1 && visitPrice(services, a.serviceIds).total > 0
-                    ? ` · Итого: ${rub(visitPrice(services, a.serviceIds).total)}`
+                  {visitPrice(services, a.serviceIds, a.qty).items.map((x) => (`${x.qty > 1 ? `${x.name} ×${x.qty}` : x.name}${x.price ? ` ${rub(x.sum)}` : ''}`)).join(', ')}
+                  {visitPrice(services, a.serviceIds, a.qty).items.length + (visitPrice(services, a.serviceIds, a.qty).items.some((x) => x.qty > 1) ? 1 : 0) > 1 && visitPrice(services, a.serviceIds, a.qty).total > 0
+                    ? ` · Итого: ${rub(visitPrice(services, a.serviceIds, a.qty).total)}`
                     : ''}
                   {a.status === 'cancelled' ? ' · отмена' : ''}
                 </div>

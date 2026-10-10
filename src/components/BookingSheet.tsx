@@ -13,7 +13,7 @@ import { cn } from '@/lib/cn';
 import type { Appointment } from '@/lib/types';
 import { notifyOwnerNewVisit } from '@/lib/telegram-notify';
 import { scheduleFlush, flushNow } from '@/lib/crm-snapshot';
-import { rub, visitPrice } from '@/lib/price';
+import { rub, visitPrice, visitLines, findService, MAX_QTY_PER_SERVICE, MAX_QTY_TOTAL } from '@/lib/price';
 import { visitComment } from '@/lib/note';
 import { WheelPicker, buildRangeOptions, type WheelOption } from './WheelPicker';
 
@@ -75,6 +75,8 @@ export function BookingSheet({
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
   const [serviceIds, setServiceIds] = useState<string[]>([]);
+  /** Quantity per service (only >1 is stored). */
+  const [qty, setQty] = useState<Record<string, number>>({});
   const [startLocal, setStartLocal] = useState('');
   const [comment, setComment] = useState('');
   const [showComment, setShowComment] = useState(false);
@@ -87,6 +89,15 @@ export function BookingSheet({
   /** Only one wheel expander open at a time; idle = compact summary rows. */
   const [wheelPanel, setWheelPanel] = useState<WheelPanel>(null);
 
+  /** Services of an existing visit: unique ids + quantities (old rows may repeat an id). */
+  function loadServices(a: Appointment) {
+    const lines = visitLines(state.services, a.serviceIds, a.qty);
+    const ids = lines.map((l) => l.id);
+    const rest = (a.serviceIds || []).filter((r) => !findService(state.services, r) && !ids.includes(r));
+    setServiceIds([...ids, ...rest]);
+    setQty(Object.fromEntries(lines.filter((l) => l.qty > 1).map((l) => [l.id, l.qty])));
+  }
+
   useEffect(() => {
     if (!mode) return;
     setError('');
@@ -96,6 +107,7 @@ export function BookingSheet({
       setPhone('');
       setName('');
       setServiceIds([]);
+      setQty({});
       setStartLocal(toLocalInput(sensibleStart(mode.start)));
       setComment('');
       setShowComment(false);
@@ -104,7 +116,7 @@ export function BookingSheet({
     } else if (mode.kind === 'edit' && appt) {
       setPhone(client0?.phone || '');
       setName(client0?.name || '');
-      setServiceIds([...appt.serviceIds]);
+      loadServices(appt);
       setStartLocal(toLocalInput(new Date(appt.start)));
       setComment(visitComment(appt));
       setShowComment(!!visitComment(appt));
@@ -113,7 +125,7 @@ export function BookingSheet({
     } else if (mode.kind === 'move' && appt) {
       setPhone(client0?.phone || '');
       setName(client0?.name || '');
-      setServiceIds([...appt.serviceIds]);
+      loadServices(appt);
       setStartLocal(toLocalInput(mode.start));
       setComment(visitComment(appt));
       setShowComment(!!visitComment(appt));
@@ -134,14 +146,10 @@ export function BookingSheet({
     if (found && found.name !== name) setName(found.name);
   }, [phone]);
 
-  const servicesSum = useMemo(() => {
-    return (
-      serviceIds.reduce((sum, id) => {
-        const s = state.services.find((x) => x.id === id);
-        return sum + (s?.durationMin || 0);
-      }, 0) || 0
-    );
-  }, [serviceIds, state.services]);
+  const servicesSum = useMemo(
+    () => visitPrice(state.services, serviceIds, qty).durationMin,
+    [serviceIds, qty, state.services],
+  );
 
   const servicesSummary = useMemo(() => {
     const selected = serviceIds
@@ -150,14 +158,15 @@ export function BookingSheet({
     if (!selected.length) return null;
     const first = selected[0];
     const extra = selected.length - 1;
+    const q = qty[first.id] || 1;
     return {
-      label: `${first.name} · ${first.durationMin}м`,
+      label: `${first.name}${q > 1 ? ` ×${q}` : ''} · ${first.durationMin * q}м`,
       extra,
       count: selected.length,
     };
-  }, [serviceIds, state.services]);
+  }, [serviceIds, qty, state.services]);
 
-  const pricedSelection = useMemo(() => visitPrice(state.services, serviceIds), [serviceIds, state.services]);
+  const pricedSelection = useMemo(() => visitPrice(state.services, serviceIds, qty), [serviceIds, qty, state.services]);
 
   const duration = mode?.kind === 'window' ? winDur : durationMin;
 
@@ -177,7 +186,7 @@ export function BookingSheet({
       .sort((a, b) => +new Date(b.start) - +new Date(a.start));
     if (!hist.length) return 'Новый клиент';
     const last = hist[0];
-    const svc = last.serviceIds.map((id) => state.services.find((s) => s.id === id)?.name).filter(Boolean).join(', ');
+    const svc = visitPrice(state.services, last.serviceIds, last.qty).label;
     return `Последний визит: ${formatVisitWhen(last.start).full}${svc ? ` · ${svc}` : ''}`;
   }, [phone, state.clients, state.appointments, state.services]);
 
@@ -187,16 +196,31 @@ export function BookingSheet({
     setWheelPanel((cur) => (cur === panel ? null : panel));
   }
 
+  function applyServices(nextIds: string[], nextQty: Record<string, number>) {
+    setServiceIds(nextIds);
+    setQty(nextQty);
+    setDurationMin(visitPrice(state.services, nextIds, nextQty).durationMin || 30);
+  }
+
   function toggleSvc(id: string) {
-    setServiceIds((prev) => {
-      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      const sum = next.reduce((acc, sid) => {
-        const s = state.services.find((x) => x.id === sid);
-        return acc + (s?.durationMin || 0);
-      }, 0);
-      setDurationMin(sum || 30);
-      return next;
-    });
+    if (serviceIds.includes(id)) {
+      const nq = { ...qty };
+      delete nq[id];
+      applyServices(serviceIds.filter((x) => x !== id), nq);
+    } else {
+      applyServices([...serviceIds, id], qty);
+    }
+  }
+
+  function changeQty(id: string, delta: number) {
+    const cur = qty[id] || 1;
+    const next = Math.max(1, Math.min(MAX_QTY_PER_SERVICE, cur + delta));
+    const totalOthers = serviceIds.reduce((sum, x) => sum + (x === id ? 0 : qty[x] || 1), 0);
+    if (totalOthers + next > MAX_QTY_TOTAL) return;
+    const nq = { ...qty };
+    if (next > 1) nq[id] = next;
+    else delete nq[id];
+    applyServices(serviceIds, nq);
   }
 
   function setStartHour(hour: number) {
@@ -353,6 +377,9 @@ export function BookingSheet({
       clientId,
       staffId: STAFF_ID,
       serviceIds,
+      qty: serviceIds.some((id) => (qty[id] || 1) > 1)
+        ? Object.fromEntries(serviceIds.filter((id) => (qty[id] || 1) > 1).map((id) => [id, qty[id]]))
+        : undefined,
       start: start.toISOString(),
       durationMin: duration,
       status: 'waiting',
@@ -365,10 +392,7 @@ export function BookingSheet({
     state.upsertAppointment(base);
     scheduleFlush(() => state.getSnapshot());
     if (isNew) {
-      const svcNames = serviceIds
-        .map((id) => state.services.find((s) => s.id === id)?.name)
-        .filter(Boolean)
-        .join(', ');
+      const svcNames = pricedSelection.label;
       notifyOwnerNewVisit(state.getSnapshot(), {
         appointmentId: base.id,
         clientName: name.trim(),
@@ -543,18 +567,41 @@ export function BookingSheet({
                     ))}
                   </div>
                 )}
-                {pricedSelection.items.length > 0 && pricedSelection.total > 0 && (
+                {pricedSelection.items.length > 0 && (
                   <div className="mt-2 rounded-xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm" data-testid="price-summary">
                     {pricedSelection.items.map((x) => (
-                      <div key={x.id} className="flex justify-between gap-3 text-gray-700">
-                        <span className="truncate">{x.name}</span>
-                        <span className="tabular-nums whitespace-nowrap">{x.price ? rub(x.price) : ''}</span>
+                      <div key={x.id} className="flex items-center justify-between gap-2 text-gray-700 py-0.5">
+                        <span className="truncate flex-1 min-w-0">{x.name}</span>
+                        <span className="flex items-center gap-1 shrink-0" data-testid={`qty-${x.id}`}>
+                          <button
+                            type="button"
+                            aria-label="Меньше"
+                            className="h-8 w-8 rounded-lg border border-gray-200 bg-white text-base leading-none disabled:opacity-30"
+                            disabled={x.qty <= 1}
+                            onClick={() => changeQty(x.id, -1)}
+                          >
+                            −
+                          </button>
+                          <span className="w-5 text-center font-semibold tabular-nums">{x.qty}</span>
+                          <button
+                            type="button"
+                            aria-label="Больше"
+                            className="h-8 w-8 rounded-lg border border-gray-200 bg-white text-base leading-none disabled:opacity-30"
+                            disabled={x.qty >= MAX_QTY_PER_SERVICE}
+                            onClick={() => changeQty(x.id, 1)}
+                          >
+                            +
+                          </button>
+                        </span>
+                        <span className="tabular-nums whitespace-nowrap w-20 text-right">{x.price ? rub(x.sum) : ''}</span>
                       </div>
                     ))}
-                    <div className="flex justify-between gap-3 mt-1 pt-1 border-t border-gray-200 font-semibold text-gray-900">
-                      <span>Итого:</span>
-                      <span className="tabular-nums whitespace-nowrap">{rub(pricedSelection.total)}</span>
-                    </div>
+                    {pricedSelection.total > 0 && (
+                      <div className="flex justify-between gap-3 mt-1 pt-1 border-t border-gray-200 font-semibold text-gray-900">
+                        <span>Итого:</span>
+                        <span className="tabular-nums whitespace-nowrap">{rub(pricedSelection.total)}</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -424,11 +424,68 @@ body.bk-body {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 14px;
-  padding: 12px 12px 11px;
   min-height: 104px;
   display: flex;
   flex-direction: column;
   transition: border-color 0.15s, background 0.15s;
+}
+.bk-root .bk-card-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 12px 12px 11px;
+  cursor: pointer;
+}
+.bk-multi {
+  margin: -4px 0 14px;
+}
+.bk-qty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 10px 10px;
+  background: #18140f;
+  border: 1px solid #4a3f37;
+  border-radius: 12px;
+  padding: 3px;
+}
+.bk-root .bk-qb {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 0;
+  background: #2b221b;
+  color: #f2e9de;
+  font: inherit;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+.bk-root .bk-qb:active:not(:disabled) {
+  background: var(--cu);
+}
+.bk-root .bk-qb:disabled {
+  opacity: 0.3;
+}
+.bk-qn {
+  font-size: 18px;
+  font-weight: 800;
+  color: #fff;
+  min-width: 28px;
+  text-align: center;
+}
+.bk-svc-l {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  text-align: right;
 }
 .bk-card-ic {
   color: var(--cu2);

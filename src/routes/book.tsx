@@ -6,6 +6,7 @@ import { STAFF_ID } from '@/lib/seed';
 import { availableDays, freeSlots } from '@/lib/slots';
 import { normalizePhone, phoneLast10 } from '@/lib/phone';
 import type { CrmState } from '@/lib/types';
+import { visitPrice, MAX_QTY_PER_SERVICE, MAX_QTY_TOTAL } from '@/lib/price';
 import { REMINDER_PRESETS, mskDayNoon } from '@/lib/msk';
 import '@/styles/book.css';
 
@@ -124,7 +125,8 @@ export function BookPage() {
   const settings = state.settings;
   const [submitting, setSubmitting] = useState(false);
   const [step, setStep] = useState<Step>('service');
-  const [serviceId, setServiceId] = useState('');
+  /** service id → quantity (insertion order = order on the card list) */
+  const [cart, setCart] = useState<Record<string, number>>({});
   const [day, setDay] = useState('');
   const [slot, setSlot] = useState('');
   const [name, setName] = useState('');
@@ -185,20 +187,48 @@ export function BookPage() {
     if (ids.length) return ids.includes(s.id);
     return s.online !== false;
   });
-  const service = onlineServices.find((s) => s.id === serviceId);
+  const cartIds = Object.keys(cart).filter((id) => onlineServices.some((s) => s.id === id));
+  const picked = useMemo(
+    () => visitPrice(onlineServices as any, cartIds, cart),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cart, pub],
+  );
+  const service = picked.items.length ? picked.items[0] : undefined; // truthy when something is chosen
+  const totalQty = picked.items.reduce((n, x) => n + x.qty, 0);
+  const totalMin = picked.durationMin || 45;
+
+  function changeQty(id: string, op: 'toggle' | 'plus' | 'minus') {
+    setCart((prev) => {
+      const cur = prev[id] || 0;
+      const others = Object.entries(prev).reduce((n, [k, v]) => n + (k === id ? 0 : v), 0);
+      let next = cur;
+      if (op === 'toggle') next = cur ? 0 : 1;
+      else if (op === 'plus') next = Math.min(MAX_QTY_PER_SERVICE, cur + 1);
+      else next = cur - 1;
+      next = Math.min(next, MAX_QTY_TOTAL - others);
+      const nx = { ...prev };
+      if (next <= 0) delete nx[id];
+      else nx[id] = next;
+      return nx;
+    });
+    // total duration changes → previously chosen day/time may no longer fit
+    setDay('');
+    setSlot('');
+    setError('');
+  }
   const staffId = state.staff?.find((s) => s.active !== false)?.id || STAFF_ID;
 
   const days = useMemo(() => {
     if (!service) return [];
-    return availableDays(state, staffId, service.durationMin);
+    return availableDays(state, staffId, totalMin);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [service, pub, staffId]);
+  }, [service, totalMin, pub, staffId]);
 
   const slots = useMemo(() => {
     if (!service || !day) return [];
-    return freeSlots({ state, staffId, day, durationMin: service.durationMin });
+    return freeSlots({ state, staffId, day, durationMin: totalMin });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [service, day, pub, staffId]);
+  }, [service, totalMin, day, pub, staffId]);
 
   // Pick the first free day automatically when entering step 2.
   useEffect(() => {
@@ -277,7 +307,7 @@ export function BookPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          serviceId: service.id,
+          items: picked.items.map((x) => ({ id: x.id, qty: x.qty })),
           day,
           time: slot,
           name: name.trim(),
@@ -324,8 +354,15 @@ export function BookPage() {
   const summary = (
     <div className="bk-summary">
       <div className="bk-row">
-        <span>Услуга</span>
-        <b>{service?.name}</b>
+        <span>{picked.items.length > 1 || totalQty > 1 ? 'Услуги' : 'Услуга'}</span>
+        <b className="bk-svc-l">
+          {picked.items.map((x) => (
+            <span key={x.id}>
+              {x.name}
+              {x.qty > 1 ? ` ×${x.qty}` : ''}
+            </span>
+          ))}
+        </b>
       </div>
       <div className="bk-row">
         <span>Дата</span>
@@ -335,7 +372,7 @@ export function BookPage() {
         <span>Время</span>
         <b>
           {slot}
-          {service ? ` · ${dur(service.durationMin)}` : ''}
+          {service ? ` · ${dur(totalMin)}` : ''}
         </b>
       </div>
       {settings.address && (
@@ -346,7 +383,7 @@ export function BookPage() {
       )}
       <div className="bk-row tot">
         <span>Итого</span>
-        <b>{rub(service?.price || 0)}</b>
+        <b>{rub(picked.total)}</b>
       </div>
     </div>
   );
@@ -427,35 +464,56 @@ export function BookPage() {
 
             <section className="bk-pad bk-sec" ref={servicesRef}>
               <Steps cur={1} />
-              <h2 className="bk-h2">Выберите услугу</h2>
+              <h2 className="bk-h2">Выберите услуги</h2>
+              <p className="bk-hint bk-multi">Можно несколько сразу или одну дважды.</p>
               <div className="bk-grid">
                 {onlineServices.map((s) => {
-                  const sel = s.id === serviceId;
+                  const q = cart[s.id] || 0;
+                  const sel = q > 0;
+                  const totalNow = Object.values(cart).reduce((n, v) => n + v, 0);
                   return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      className={`bk-card ${sel ? 'sel' : ''}`}
-                      aria-pressed={sel}
-                      onClick={() => {
-                        setServiceId(s.id);
-                        setError('');
-                        if (s.id !== serviceId) {
-                          setDay('');
-                          setSlot('');
-                        }
-                      }}
-                    >
-                      <span className="bk-card-ic">
-                        <ServiceIcon name={s.name} />
-                      </span>
-                      <span className="bk-radio">{sel && <IcCheck />}</span>
-                      <span className="bk-card-nm">{s.name}</span>
-                      <span className="bk-card-pr">
-                        {rub(s.price)}
-                        <span className="bk-card-du">{dur(s.durationMin)}</span>
-                      </span>
-                    </button>
+                    <div key={s.id} className={`bk-card ${sel ? 'sel' : ''}`}>
+                      <button
+                        type="button"
+                        className="bk-card-main"
+                        aria-pressed={sel}
+                        onClick={() => changeQty(s.id, 'toggle')}
+                      >
+                        <span className="bk-card-ic">
+                          <ServiceIcon name={s.name} />
+                        </span>
+                        <span className="bk-radio">{sel && <IcCheck />}</span>
+                        <span className="bk-card-nm">{s.name}</span>
+                        <span className="bk-card-pr">
+                          {rub(s.price)}
+                          <span className="bk-card-du">{dur(s.durationMin)}</span>
+                        </span>
+                      </button>
+                      {sel && (
+                        <div className="bk-qty" role="group" aria-label={`Количество: ${s.name}`}>
+                          <button
+                            type="button"
+                            className="bk-qb"
+                            aria-label="Меньше"
+                            onClick={() => changeQty(s.id, 'minus')}
+                          >
+                            −
+                          </button>
+                          <span className="bk-qn" aria-live="polite">
+                            {q}
+                          </span>
+                          <button
+                            type="button"
+                            className="bk-qb"
+                            aria-label="Больше"
+                            disabled={q >= MAX_QTY_PER_SERVICE || totalNow >= MAX_QTY_TOTAL}
+                            onClick={() => changeQty(s.id, 'plus')}
+                          >
+                            +
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -465,9 +523,9 @@ export function BookPage() {
               <div className="bk-sticky">
                 <div className="bk-sticky-in">
                   <div className="bk-sum">
-                    <b>{service.name}</b>
+                    <b>Итого: {rub(picked.total)}</b>
                     <span>
-                      {dur(service.durationMin)} · {rub(service.price)}
+                      {dur(totalMin)} · {totalQty} {totalQty === 1 ? 'услуга' : totalQty < 5 ? 'услуги' : 'услуг'}
                     </span>
                   </div>
                   <button type="button" className="bk-btn" onClick={() => setStep('time')}>
@@ -486,7 +544,7 @@ export function BookPage() {
               <Steps cur={2} />
               <div className="bk-chosen">
                 <span>
-                  {service.name} · {dur(service.durationMin)} · {rub(service.price)}
+                  {picked.label} · {dur(totalMin)} · {rub(picked.total)}
                 </span>
                 <button type="button" className="bk-link" onClick={() => setStep('service')}>
                   Изменить
@@ -669,8 +727,15 @@ export function BookPage() {
               <p className="bk-sub bk-c">Ждём вас! Детали записи:</p>
               <div className="bk-summary">
                 <div className="bk-row">
-                  <span>Услуга</span>
-                  <b>{service?.name}</b>
+                  <span>{picked.items.length > 1 || totalQty > 1 ? 'Услуги' : 'Услуга'}</span>
+                  <b className="bk-svc-l">
+                    {picked.items.map((x) => (
+                      <span key={x.id}>
+                        {x.name}
+                        {x.qty > 1 ? ` ×${x.qty}` : ''}
+                      </span>
+                    ))}
+                  </b>
                 </div>
                 <div className="bk-row">
                   <span>Когда</span>
@@ -686,7 +751,7 @@ export function BookPage() {
                 )}
                 <div className="bk-row tot">
                   <span>Итого</span>
-                  <b>{rub(service?.price || 0)}</b>
+                  <b>{rub(picked.total)}</b>
                 </div>
               </div>
               <div className="bk-tgbox">
@@ -710,7 +775,7 @@ export function BookPage() {
                 className="bk-btn ghost"
                 onClick={() => {
                   setStep('service');
-                  setServiceId('');
+                  setCart({});
                   setDay('');
                   setSlot('');
                   setSelectedReminders([]);

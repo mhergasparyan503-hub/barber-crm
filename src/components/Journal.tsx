@@ -478,16 +478,13 @@ export function Journal({
                         💬
                       </span>
                     )}
-                    {visitPrice(state.services, a.serviceIds).total > 0 && (
-                      <span className="shrink-0 tabular-nums opacity-95">{rub(visitPrice(state.services, a.serviceIds).total)}</span>
+                    {visitPrice(state.services, a.serviceIds, a.qty).total > 0 && (
+                      <span className="shrink-0 tabular-nums opacity-95">{rub(visitPrice(state.services, a.serviceIds, a.qty).total)}</span>
                     )}
                   </div>
                   {a.durationMin >= 30 && (
                     <div className="text-[10px] opacity-90 truncate">
-                      {a.serviceIds
-                        .map((id) => state.services.find((sv) => sv.id === id)?.name)
-                        .filter(Boolean)
-                        .join(', ')}
+                      {visitPrice(state.services, a.serviceIds, a.qty).label}
                     </div>
                   )}
                   {commentLine && (
@@ -547,14 +544,17 @@ export function Journal({
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {(visitPrice(state.services, menuAppt.serviceIds).total > 0 || visitComment(menuAppt)) && (
+            {(visitPrice(state.services, menuAppt.serviceIds, menuAppt.qty).total > 0 || visitComment(menuAppt)) && (
               <div className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100">
+                {visitPrice(state.services, menuAppt.serviceIds, menuAppt.qty).items.some((x) => x.qty > 1) && (
+                  <div className="mb-0.5 text-gray-700">{visitPrice(state.services, menuAppt.serviceIds, menuAppt.qty).label}</div>
+                )}
                 <div>
                   {menuClient.name}
-                  {visitPrice(state.services, menuAppt.serviceIds).total > 0 && (
+                  {visitPrice(state.services, menuAppt.serviceIds, menuAppt.qty).total > 0 && (
                     <>
                       {' · '}
-                      <span className="font-semibold text-gray-900">{rub(visitPrice(state.services, menuAppt.serviceIds).total)}</span>
+                      <span className="font-semibold text-gray-900">{rub(visitPrice(state.services, menuAppt.serviceIds, menuAppt.qty).total)}</span>
                     </>
                   )}
                 </div>

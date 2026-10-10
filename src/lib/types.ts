@@ -41,6 +41,8 @@ export interface Appointment {
   clientId: string;
   staffId: string;
   serviceIds: string[];
+  /** Quantity per service id (only ids with qty > 1; default 1). Total duration/price = Σ × qty. */
+  qty?: Record<string, number>;
   /** Wall-clock start (MSK naive or +03:00). Not startsAt. */
   start: string;
   durationMin: number;

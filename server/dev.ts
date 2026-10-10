@@ -18,6 +18,7 @@ import { claimUpdateId } from './tg-dedup';
 import { withCrmLock, mergeIncoming, stampChanges, publicView } from './crm-merge';
 import { buildReminders, mskWallISO } from '../src/lib/msk';
 import { normalizePhone, phoneLast10 } from '../src/lib/phone';
+import { cartFromRaw, visitPrice } from '../src/lib/price';
 import fs from 'fs';
 import * as auth from './auth';
 import path from 'path';
@@ -292,10 +293,17 @@ async function main() {
       const snap = (await loadCrmSnapshot()) as any;
       if (!snap?.settings) return { ok: false, error: 'CRM не настроена' };
       if (!snap.settings.onlineEnabled) return { ok: false, error: 'Запись по ссылке закрыта' };
-      const svc = (snap.services || []).find((s: any) => s.id === b?.serviceId && s.active !== false);
-      if (!svc) return { ok: false, error: 'Услуга не найдена', code: 'service' };
+      // Services: new format `items: [{id, qty}]`, old `serviceId`. Duration/price are ALWAYS recomputed here.
+      const onlineIds: string[] = snap.settings.onlineServiceIds || [];
+      const isOnline = (s: any) => (onlineIds.length ? onlineIds.includes(s.id) : s.online !== false);
+      const rawItems = Array.isArray(b?.items) ? b.items : b?.serviceId ? [{ id: b.serviceId, qty: 1 }] : [];
+      const cart = cartFromRaw(snap.services || [], rawItems, isOnline);
+      if (cart.error) return { ok: false, error: cart.error, code: 'service' };
+      const priced = visitPrice(snap.services || [], cart.serviceIds, cart.qty);
+      const totalMin = priced.durationMin || 45;
+      const svc = (snap.services || []).find((s: any) => s.id === cart.serviceIds[0]);
       const sid = staffIdOf(snap);
-      const daySlots = computeSlots(snap, sid, day, svc.durationMin);
+      const daySlots = computeSlots(snap, sid, day, totalMin);
       if (!daySlots.includes(time)) {
         return {
           ok: false,
@@ -323,9 +331,10 @@ async function main() {
         id: 'apt_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4),
         clientId: client.id,
         staffId: sid,
-        serviceIds: [svc.id],
+        serviceIds: cart.serviceIds,
+        ...(cart.qty ? { qty: cart.qty } : {}),
         start: startISO,
-        durationMin: svc.durationMin,
+        durationMin: totalMin,
         status: 'waiting',
         origin: 'Онлайн-запись',
         note: cleanComment(b?.comment) || undefined,

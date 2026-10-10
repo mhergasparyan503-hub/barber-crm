@@ -1,6 +1,7 @@
 import { sendMessage, editMessageText, answerCallback, getUpdates } from './telegram-api';
 import { parseApStart, mskWallISO, mskParts, reminderAtBefore, morningReminderAt, mskDow, mskDateKey } from './msk';
 import { claimUpdateId } from './tg-dedup';
+import { visitPrice, visitLines, cartFromRaw, MAX_QTY_PER_SERVICE, MAX_QTY_TOTAL } from '../src/lib/price';
 
 type Crm = {
   clients: any[];
@@ -266,7 +267,7 @@ async function listUpcomingForOwner(token: string, chatId: string, crm: Crm, cli
     const c = crm.clients.find((x) => x.id === a.clientId);
     const svc = crm.services.find((s) => a.serviceIds?.includes(s.id));
     const p = mskParts(parseApStart(apStart(a)));
-    const label = `${p.date.slice(5)} ${p.time} ${c?.name || 'Клиент'}${svc ? ' · ' + svc.name : ''}`.slice(0, 64);
+    const label = `${p.date.slice(5)} ${p.time} ${c?.name || 'Клиент'}${apptServiceNames(crm, a) ? ' · ' + apptServiceNames(crm, a) : svc ? ' · ' + svc.name : ''}`.slice(0, 64);
     return [btn(label, `ow:mv:${a.id.slice(-10)}`)];
   });
   rows.push([btn('« 📋 Меню', 'ow:menu')]);
@@ -312,14 +313,12 @@ function svcByRef(crm: Crm, ref: string) {
   return crm.services?.find((s) => s.id === ref) || crm.services?.find((s) => String(s.name || '').trim().toLowerCase() === k);
 }
 function apptTotalRub(crm: Crm, a: any): string {
-  const total = (a?.serviceIds || []).reduce((sum: number, id: string) => {
-    const n = Number(svcByRef(crm, id)?.price);
-    return sum + (Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
-  }, 0);
+  const total = visitPrice(crm.services as any, a?.serviceIds, a?.qty).total;
   return total > 0 ? `${total.toLocaleString('ru-RU')} ₽` : '';
 }
+/** «Мужская стрижка ×2, Борода» */
 function apptServiceNames(crm: Crm, a: any): string {
-  return (a?.serviceIds || []).map((id: string) => svcByRef(crm, id)?.name).filter(Boolean).join(', ');
+  return visitPrice(crm.services as any, a?.serviceIds, a?.qty).label;
 }
 
 function formatOwnerApptBlock(crm: Crm, a: any, index: number): string {
@@ -631,7 +630,7 @@ async function startClientRemindFlow(
     const p = mskParts(parseApStart(apStart(a)));
     const n = (a.reminders || []).length;
     const rem = n ? ` · ${n} нап.` : '';
-    const label = `${p.date.slice(5)} ${p.time}${svc ? ' · ' + svc.name : ''}${rem}`.slice(0, 64);
+    const label = `${p.date.slice(5)} ${p.time}${apptServiceNames(crm, a) ? ' · ' + apptServiceNames(crm, a) : svc ? ' · ' + svc.name : ''}${rem}`.slice(0, 64);
     return [btn(label, `bk:rm:${a.id.slice(-10)}`)];
   });
   rows.push([btn('📋 Меню', 'bk:menu')]);
@@ -697,7 +696,8 @@ function formatCancelVisitSummary(crm: Crm, ap: any, forOwner: boolean): string 
   const p = mskParts(parseApStart(apStart(ap)));
   const svc = crm.services.find((s) => ap.serviceIds?.includes(s.id));
   const client = crm.clients.find((c) => c.id === ap.clientId);
-  const when = `${p.date} в ${p.time}${svc ? ` — ${svc.name}` : ''}`;
+  const names = apptServiceNames(crm, ap) || svc?.name;
+  const when = `${p.date} в ${p.time}${names ? ` — ${names}` : ''}`;
   if (forOwner) {
     return `${client?.name || 'Клиент'}\n${client?.phone || '—'}\n${when}`;
   }
@@ -1205,7 +1205,7 @@ async function sendClientMenu(token: string, chatId: string, crm: Crm, clientId?
     await sendMessage(
       token,
       chatId,
-      `Ваша ближайшая запись: ${p.date} в ${p.time}${svc ? ` — ${svc.name}` : ''}.\nВыберите действие кнопками внизу (иконка сетки у поля ввода).`,
+      `Ваша ближайшая запись: ${p.date} в ${p.time}${apptServiceNames(crm, nearest) || svc ? ` — ${apptServiceNames(crm, nearest) || svc?.name}` : ''}.\nВыберите действие кнопками внизу (иконка сетки у поля ввода).`,
       markup,
     );
     return;
@@ -1333,15 +1333,101 @@ function listBookableServices(crm: Crm) {
   });
 }
 
+function fmtDur(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return h ? `${h} ч${m ? ` ${m} мин` : ''}` : `${m} мин`;
+}
+
+function cartOf(draft: any): Record<string, number> {
+  const c = draft?.cart;
+  return c && typeof c === 'object' ? c : {};
+}
+
+/** Clean cart → lines/totals computed from OUR service list (never from client-sent numbers). */
+function cartTotals(crm: Crm, cart: Record<string, number>) {
+  const ids = Object.keys(cart);
+  const v = visitPrice(crm.services as any, ids, cart);
+  return { ...v, ids, count: v.items.reduce((n, x) => n + x.qty, 0) };
+}
+
+function pickerText(crm: Crm, draft: any): string {
+  const t = cartTotals(crm, cartOf(draft));
+  if (!t.items.length) {
+    return 'Выберите услугу.\nМожно несколько сразу. Нужна одна услуга дважды — выберите её и нажмите ➕.';
+  }
+  const price = t.total ? `${t.total.toLocaleString('ru-RU')} ₽ · ` : '';
+  return `Ваш выбор: ${t.label}\nИтого: ${price}${fmtDur(t.durationMin || 45)}\n\nДобавьте ещё услугу, поменяйте количество (➖ ➕) или нажмите «Далее».`;
+}
+
+function pickerKeyboard(crm: Crm, draft: any) {
+  const cart = cartOf(draft);
+  const rows: any[][] = listBookableServices(crm).map((s) => {
+    const q = cart[s.id] || 0;
+    const nm = String(s.name || '').trim();
+    if (!q) {
+      const price = Number(s.price) > 0 ? ` · ${Math.round(Number(s.price)).toLocaleString('ru-RU')}₽` : '';
+      return [btn(`${nm}${price}`, `bk:ct:${s.id}`)];
+    }
+    return [btn('➖', `bk:cm:${s.id}`), btn(`✅ ${nm}${q > 1 ? ` ×${q}` : ''}`, `bk:ct:${s.id}`), btn('➕', `bk:cp:${s.id}`)];
+  });
+  if (Object.keys(cart).length) rows.push([btn('Далее →', 'bk:cn')]);
+  rows.push([btn('« 📋 Меню', 'bk:menu')]);
+  return kb(rows);
+}
+
+/** Draft for a NEW booking cart (drops reschedule leftovers). */
+function cartDraft(crm: Crm, chatId: string): any {
+  const d = { ...getDraft(crm, chatId) };
+  if (d.ignoreId || d.ownerMove || d.apId) {
+    for (const k of ['ignoreId', 'ownerMove', 'apId', 'cart', 'day', 'time', 'dur', 'serviceId']) delete d[k];
+  }
+  delete d.await;
+  return d;
+}
+
+async function showServicePicker(token: string, chatId: string, crm: Crm, msgId?: number) {
+  const draft = getDraft(crm, chatId);
+  const text = pickerText(crm, draft);
+  const markup = pickerKeyboard(crm, draft);
+  if (msgId) {
+    const r: any = await editMessageText(token, chatId, msgId, text, markup);
+    if (!r || r.ok !== false || /not modified/i.test(String(r.description || ''))) return;
+  }
+  await sendMessage(token, chatId, text, markup);
+}
+
 async function startBookingServices(token: string, chatId: string, crm: Crm) {
   const services = listBookableServices(crm);
-  const rows = services.map((s) => [btn(`${s.name} · ${s.price}₽`, `bk:sv:${s.id}`)]);
-  if (!rows.length) {
+  if (!services.length) {
     await sendMessage(token, chatId, 'Нет доступных услуг.', kb([[btn('« 📋 Меню', 'bk:menu')]]));
     return;
   }
-  rows.push([btn('« 📋 Меню', 'bk:menu')]);
-  await sendMessage(token, chatId, 'Выберите услугу:', kb(rows));
+  const d = cartDraft(crm, chatId);
+  setDraft(crm, chatId, d);
+  await showServicePicker(token, chatId, crm);
+}
+
+async function cartChange(token: string, chatId: string, crm: Crm, id: string, op: 't' | '+' | '-', msgId?: number) {
+  const svc = listBookableServices(crm).find((s) => s.id === id);
+  const d = cartDraft(crm, chatId);
+  const cart = { ...cartOf(d) };
+  if (!svc) {
+    setDraft(crm, chatId, d);
+    await showServicePicker(token, chatId, crm, msgId);
+    return;
+  }
+  const cur = cart[id] || 0;
+  const others = Object.entries(cart).reduce((n, [k, v]) => n + (k === id ? 0 : Number(v) || 0), 0);
+  let next = cur;
+  if (op === 't') next = cur ? 0 : 1;
+  else if (op === '+') next = Math.min(MAX_QTY_PER_SERVICE, cur + 1);
+  else next = cur - 1;
+  if (others + next > MAX_QTY_TOTAL) next = Math.max(0, MAX_QTY_TOTAL - others);
+  if (next <= 0) delete cart[id];
+  else cart[id] = next;
+  setDraft(crm, chatId, { ...d, cart });
+  await showServicePicker(token, chatId, crm, msgId);
 }
 
 async function showMyAppointments(token: string, chatId: string, crm: Crm) {
@@ -1371,7 +1457,7 @@ async function showMyAppointments(token: string, chatId: string, crm: Crm) {
     .map((a) => {
       const svc = crm.services.find((s) => a.serviceIds?.includes(s.id));
       const p = mskParts(parseApStart(apStart(a)));
-      return `• ${p.date} ${p.time} — ${svc?.name || 'услуга'}`;
+      return `• ${p.date} ${p.time} — ${apptServiceNames(crm, a) || svc?.name || 'услуга'}`;
     })
     .join('\n');
   await sendMessage(token, chatId, `Ваши записи:\n${lines}`, kb([[btn('📋 Меню', 'bk:menu')]]));
@@ -1409,13 +1495,34 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
     await startBookingServices(token, chatId, crm);
     return;
   }
+  if (data.startsWith('bk:ct:') || data.startsWith('bk:cp:') || data.startsWith('bk:cm:')) {
+    const op = data[3 + 1] === 't' ? 't' : data[3 + 1] === 'p' ? '+' : '-';
+    const msgId = typeof cq.message?.message_id === 'number' ? cq.message.message_id : undefined;
+    await cartChange(token, chatId, crm, data.slice(6), op, msgId);
+    return;
+  }
+  if (data === 'bk:cn') {
+    const d = cartDraft(crm, chatId);
+    const t = cartTotals(crm, cartOf(d));
+    if (!t.ids.length) {
+      await sendMessage(token, chatId, 'Сначала выберите услугу.', pickerKeyboard(crm, d));
+      return;
+    }
+    const dur = t.durationMin || 45;
+    setDraft(crm, chatId, { ...d, serviceId: t.ids[0], dur, day: undefined, time: undefined });
+    const ym = `${mskParts(new Date()).date.slice(0, 7)}`;
+    await sendMonthCalendar(token, chatId, ym, crm, dur);
+    return;
+  }
   if (data.startsWith('bk:sv:')) {
+    // Old buttons from earlier messages: one service, quantity 1.
     const serviceId = data.slice(6);
-    setDraft(crm, chatId, { ...(getDraft(crm, chatId) || {}), serviceId, ignoreId: undefined, dur: undefined, ownerMove: undefined, apId: undefined });
-    const now = new Date();
-    const ym = `${mskParts(now).date.slice(0, 7)}`;
     const svc0 = crm.services.find((s) => s.id === serviceId);
-    await sendMonthCalendar(token, chatId, ym, crm, svc0?.durationMin || 45);
+    const d = cartDraft(crm, chatId);
+    const dur = svc0?.durationMin || 45;
+    setDraft(crm, chatId, { ...d, serviceId, cart: { [serviceId]: 1 }, dur, day: undefined, time: undefined });
+    const ym = `${mskParts(new Date()).date.slice(0, 7)}`;
+    await sendMonthCalendar(token, chatId, ym, crm, dur);
     return;
   }
   if (data.startsWith('bk:mo:')) {
@@ -1490,7 +1597,7 @@ async function handleCallback(token: string, cq: any, crm: Crm) {
       await sendMessage(
         token,
         chatId,
-        `Перенести на ${draft.day} в ${time}?\n${svc?.name || 'услуга'}`,
+        `Перенести на ${draft.day} в ${time}?\n${apptServiceNames(crm, findBySuffix(crm.appointments, draft.ignoreId)) || svc?.name || 'услуга'}`,
         kb([[btn('🔁 Да, перенести', 'bk:cf'), btn('❌ Отмена', 'bk:x')]]),
       );
       return;
@@ -1850,12 +1957,30 @@ export function cleanComment(raw: unknown): string {
     .trim();
 }
 
+/** Booking cart of a draft, validated against OUR services: ids, qty, total minutes and price. */
+function bookingCart(crm: Crm, draft: any) {
+  const raw = Object.entries(cartOf(draft)).map(([id, qty]) => ({ id, qty }));
+  if (!raw.length && draft.serviceId) raw.push({ id: draft.serviceId, qty: 1 });
+  const c = cartFromRaw(crm.services as any, raw);
+  const ids = c.error ? [] : c.serviceIds;
+  const v = visitPrice(crm.services as any, ids, c.qty);
+  return {
+    serviceIds: ids,
+    qty: c.qty,
+    label: v.label,
+    total: v.total,
+    durationMin: ids.length ? v.durationMin || 45 : 45,
+    first: crm.services.find((x) => x.id === ids[0]),
+  };
+}
+
 async function sendBookConfirm(token: string, chatId: string, crm: Crm, draft: any) {
-  const svc = crm.services.find((s) => s.id === draft.serviceId);
+  const t = bookingCart(crm, draft);
   await sendMessage(
     token,
     chatId,
-    `Подтвердите запись:\n\n${svc?.name || 'услуга'}\n${draft.day} в ${draft.time}\n${svc?.durationMin || 45} мин` +
+    `Подтвердите запись:\n\n${t.label || 'услуга'}\n${draft.day} в ${draft.time}\n${t.durationMin} мин` +
+      (t.total ? `\nИтого: ${t.total.toLocaleString('ru-RU')} ₽` : '') +
       (draft.comment ? `\n\n💬 ${draft.comment}` : ''),
     kb([[btn('✅ Подтвердить', 'bk:cf'), btn('❌ Отмена', 'bk:x')]]),
   );
@@ -1911,11 +2036,16 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
     await sendMessage(token, chatId, 'Черновик записи устарел. Начните снова.', kb([[btn('📅 Записаться', 'bk:go')]]));
     return;
   }
-  const svc = crm.services.find((s) => s.id === draft.serviceId);
+  const cart = bookingCart(crm, draft);
+  const svc = cart.first;
   const sid = staffIdOf(crm);
   const ownerMode = !!draft.ownerBook || isOwnerChat(crm, chatId);
+  if (!cart.serviceIds.length) {
+    await sendMessage(token, chatId, 'Выбранная услуга больше недоступна. Начните снова.', kb([[btn('📅 Записаться', 'bk:go')]]));
+    return;
+  }
   // Re-check at confirm time: the slot may have been taken meanwhile (web journal, /book, another client).
-  if (!computeSlots(crm, sid, draft.day, svc?.durationMin || 45).includes(draft.time)) {
+  if (!computeSlots(crm, sid, draft.day, cart.durationMin).includes(draft.time)) {
     const d = { ...draft };
     delete d.time;
     delete d.await;
@@ -1994,9 +2124,10 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
     id: 'apt_' + Math.random().toString(36).slice(2, 10),
     clientId: client.id,
     staffId: sid,
-    serviceIds: [svc?.id].filter(Boolean),
+    serviceIds: cart.serviceIds,
+    ...(cart.qty ? { qty: cart.qty } : {}),
     start: startIso,
-    durationMin: svc?.durationMin || 45,
+    durationMin: cart.durationMin,
     status: 'waiting',
     origin: ownerMode ? 'Telegram (мастер)' : 'Telegram',
     note: (!ownerMode && cleanComment(draft.comment)) || undefined,
@@ -2018,10 +2149,10 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
     '{studio}\n\nВы записаны.\n\n{service}\n{weekday}, {date} в {time}\n{duration}\n\nЕсли планы изменятся — перенесите или отмените кнопками ниже.';
   const text = fillTemplate(tpl, {
     studio: crm.settings.studioName || 'Барбершоп',
-    service: svc?.name || 'услуга',
+    service: cart.label || 'услуга',
     date: draft.day,
     time: draft.time,
-    duration: `${svc?.durationMin || 45} мин`,
+    duration: `${cart.durationMin} мин`,
     weekday: weekdayRu(startIso),
     name: client.name || '',
     phone: client.phone || '',
@@ -2030,7 +2161,7 @@ async function finalizeBooking(token: string, chatId: string, crm: Crm, from?: a
   if (ownerMode) {
     const summary =
       `Клиент записан.\n\n${client.name || 'Клиент'}\n${client.phone || '—'}\n` +
-      `${svc?.name || 'услуга'}\n${draft.day} в ${draft.time}\n${svc?.durationMin || 45} мин` +
+      `${cart.label || 'услуга'}\n${draft.day} в ${draft.time}\n${cart.durationMin} мин` +
       (apptTotalRub(crm, ap) ? `\nИтого: ${apptTotalRub(crm, ap)}` : '') +
       (!clientTg && crm.settings?.telegramBotUsername
         ? `\n\nСсылка для клиента (откроет бота с его записью и напоминаниями):\nhttps://t.me/${String(crm.settings.telegramBotUsername).replace(/^@/, '')}?start=v_${ap.id}`
@@ -2415,7 +2546,7 @@ export async function processDueReminders(
       const text = fillTemplate(tpl, {
         name: client?.name || '',
         studio: crm.settings?.studioName || '',
-        service: svc?.name || '',
+        service: apptServiceNames(crm, a) || svc?.name || '',
         weekday: weekdayRu(apStart(a)),
         date: parts.date,
         time: parts.time,
