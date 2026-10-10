@@ -19,7 +19,7 @@ import { WheelPicker, buildRangeOptions, type WheelOption } from './WheelPicker'
 
 const DURATION_STEP = 15; // match settings.slotMinutes / service steps
 const DURATION_MIN = 15;
-const DURATION_MAX = 240;
+const DURATION_MAX = 720; // up to 12 h (10 services × 2 h would not fit otherwise)
 const DURATION_HOUR_MAX = Math.floor(DURATION_MAX / 60);
 const MINUTE_STEP = 10; // start-time minute grid
 
@@ -83,11 +83,19 @@ export function BookingSheet({
   const [confirmDel, setConfirmDel] = useState(false);
   const [winDur, setWinDur] = useState(30);
   const [durationMin, setDurationMin] = useState(30);
+  /** true once the master set the duration by hand — then the services total must not override it */
+  const [durManual, setDurManual] = useState(false);
   const [error, setError] = useState('');
   /** Collapsed by default when editing/moving with services already chosen; expanded for new. */
   const [servicesOpen, setServicesOpen] = useState(true);
   /** Only one wheel expander open at a time; idle = compact summary rows. */
   const [wheelPanel, setWheelPanel] = useState<WheelPanel>(null);
+
+  /** Saved duration differs from the services total → it was set by hand: keep it when services change. */
+  function isManualDuration(a: Appointment) {
+    const sum = visitPrice(state.services, a.serviceIds, a.qty).durationMin;
+    return sum > 0 && (a.durationMin || 0) !== sum;
+  }
 
   /** Services of an existing visit: unique ids + quantities (old rows may repeat an id). */
   function loadServices(a: Appointment) {
@@ -112,6 +120,7 @@ export function BookingSheet({
       setComment('');
       setShowComment(false);
       setDurationMin(30);
+      setDurManual(false);
       setServicesOpen(true);
     } else if (mode.kind === 'edit' && appt) {
       setPhone(client0?.phone || '');
@@ -121,6 +130,7 @@ export function BookingSheet({
       setComment(visitComment(appt));
       setShowComment(!!visitComment(appt));
       setDurationMin(appt.durationMin || 30);
+      setDurManual(isManualDuration(appt));
       setServicesOpen(!(appt.serviceIds.length > 0));
     } else if (mode.kind === 'move' && appt) {
       setPhone(client0?.phone || '');
@@ -130,6 +140,7 @@ export function BookingSheet({
       setComment(visitComment(appt));
       setShowComment(!!visitComment(appt));
       setDurationMin(appt.durationMin || 30);
+      setDurManual(isManualDuration(appt));
       setServicesOpen(!(appt.serviceIds.length > 0));
     } else if (mode.kind === 'window') {
       setStartLocal(toLocalInput(mode.start));
@@ -199,7 +210,10 @@ export function BookingSheet({
   function applyServices(nextIds: string[], nextQty: Record<string, number>) {
     setServiceIds(nextIds);
     setQty(nextQty);
-    setDurationMin(visitPrice(state.services, nextIds, nextQty).durationMin || 30);
+    if (!durManual) {
+      const sum = visitPrice(state.services, nextIds, nextQty).durationMin;
+      setDurationMin(sum ? clampDuration(sum) : 30);
+    }
   }
 
   function toggleSvc(id: string) {
@@ -429,6 +443,7 @@ export function BookingSheet({
   }
 
   const activeServices = state.services.filter((s) => s.active);
+  const totalQtyNow = serviceIds.reduce((n, id) => n + (qty[id] || 1), 0);
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={onClose}>
@@ -528,6 +543,30 @@ export function BookingSheet({
                     {servicesOpen ? 'Свернуть' : serviceIds.length ? 'Изменить' : 'Выбрать'}
                   </span>
                 </button>
+                {pricedSelection.items.length > 0 && (
+                  <div className="mb-2 rounded-xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm" data-testid="price-summary">
+                    {!servicesOpen && <div className="text-gray-700 mb-1">{pricedSelection.label}</div>}
+                    <div className="flex justify-between gap-3 font-semibold text-gray-900">
+                      <span>Итого:</span>
+                      <span className="tabular-nums whitespace-nowrap">
+                        {pricedSelection.total > 0 ? `${rub(pricedSelection.total)} · ` : ''}
+                        {formatDurationRu(clampDuration(servicesSum || durationMin))}
+                      </span>
+                    </div>
+                    {durManual && servicesSum > 0 && clampDuration(servicesSum) !== durationClamped && (
+                      <button
+                        type="button"
+                        className="mt-1 text-xs font-medium text-accent"
+                        onClick={() => {
+                          setDurManual(false);
+                          setDurationMin(clampDuration(servicesSum));
+                        }}
+                      >
+                        Длительность задана вручную ({formatDurationRu(durationClamped)}) — вернуть по услугам
+                      </button>
+                    )}
+                  </div>
+                )}
                 {!servicesOpen ? (
                   <button
                     type="button"
@@ -549,59 +588,64 @@ export function BookingSheet({
                     )}
                   </button>
                 ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {activeServices.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => toggleSvc(s.id)}
-                        className={cn(
-                          'px-3 py-1.5 rounded-full text-sm border min-h-9',
-                          serviceIds.includes(s.id)
-                            ? 'bg-accent text-white border-accent'
-                            : 'border-gray-200 bg-white',
-                        )}
-                      >
-                        {s.name} · {s.durationMin}м{rub(s.price) ? ` · ${rub(s.price)}` : ''}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {pricedSelection.items.length > 0 && (
-                  <div className="mt-2 rounded-xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm" data-testid="price-summary">
-                    {pricedSelection.items.map((x) => (
-                      <div key={x.id} className="flex items-center justify-between gap-2 text-gray-700 py-0.5">
-                        <span className="truncate flex-1 min-w-0">{x.name}</span>
-                        <span className="flex items-center gap-1 shrink-0" data-testid={`qty-${x.id}`}>
+                  <div className="rounded-xl border border-gray-200 divide-y divide-gray-100 overflow-hidden" data-testid="service-list">
+                    {activeServices.map((s) => {
+                      const q = serviceIds.includes(s.id) ? qty[s.id] || 1 : 0;
+                      const sel = q > 0;
+                      return (
+                        <div
+                          key={s.id}
+                          className={cn('flex items-center gap-2 pl-3 pr-2 min-h-14', sel ? 'bg-accent/5' : 'bg-white')}
+                        >
                           <button
                             type="button"
-                            aria-label="Меньше"
-                            className="h-8 w-8 rounded-lg border border-gray-200 bg-white text-base leading-none disabled:opacity-30"
-                            disabled={x.qty <= 1}
-                            onClick={() => changeQty(x.id, -1)}
+                            onClick={() => toggleSvc(s.id)}
+                            aria-pressed={sel}
+                            className="flex-1 min-w-0 flex items-center gap-3 text-left py-2 min-h-14"
                           >
-                            −
+                            <span
+                              className={cn(
+                                'h-6 w-6 shrink-0 rounded-full border flex items-center justify-center text-sm leading-none',
+                                sel ? 'bg-accent border-accent text-white' : 'border-gray-300 text-transparent',
+                              )}
+                              aria-hidden
+                            >
+                              ✓
+                            </span>
+                            <span className="min-w-0">
+                              <span className="block text-sm text-gray-900 truncate">{s.name}</span>
+                              <span className="block text-xs text-gray-500">
+                                {formatDurationRu(s.durationMin)}
+                                {rub(s.price) ? ` · ${rub(s.price)}` : ''}
+                              </span>
+                            </span>
                           </button>
-                          <span className="w-5 text-center font-semibold tabular-nums">{x.qty}</span>
-                          <button
-                            type="button"
-                            aria-label="Больше"
-                            className="h-8 w-8 rounded-lg border border-gray-200 bg-white text-base leading-none disabled:opacity-30"
-                            disabled={x.qty >= MAX_QTY_PER_SERVICE}
-                            onClick={() => changeQty(x.id, 1)}
-                          >
-                            +
-                          </button>
-                        </span>
-                        <span className="tabular-nums whitespace-nowrap w-20 text-right">{x.price ? rub(x.sum) : ''}</span>
-                      </div>
-                    ))}
-                    {pricedSelection.total > 0 && (
-                      <div className="flex justify-between gap-3 mt-1 pt-1 border-t border-gray-200 font-semibold text-gray-900">
-                        <span>Итого:</span>
-                        <span className="tabular-nums whitespace-nowrap">{rub(pricedSelection.total)}</span>
-                      </div>
-                    )}
+                          {sel && (
+                            <span className="flex items-center gap-1 shrink-0" data-testid={`qty-${s.id}`}>
+                              <button
+                                type="button"
+                                aria-label="Меньше"
+                                className="h-10 w-10 rounded-lg border border-gray-200 bg-white text-lg leading-none disabled:opacity-30"
+                                disabled={q <= 1}
+                                onClick={() => changeQty(s.id, -1)}
+                              >
+                                −
+                              </button>
+                              <span className="w-6 text-center font-semibold tabular-nums">{q}</span>
+                              <button
+                                type="button"
+                                aria-label="Больше"
+                                className="h-10 w-10 rounded-lg border border-gray-200 bg-white text-lg leading-none disabled:opacity-30"
+                                disabled={q >= MAX_QTY_PER_SERVICE || totalQtyNow >= MAX_QTY_TOTAL}
+                                onClick={() => changeQty(s.id, 1)}
+                              >
+                                +
+                              </button>
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -619,8 +663,14 @@ export function BookingSheet({
                 <DurationWheels
                   hours={durHours}
                   minutes={durMins}
-                  onHoursChange={(h) => setDurationHours(h, durationClamped, setDurationMin)}
-                  onMinutesChange={(m) => setDurationMinutes(m, durationClamped, setDurationMin)}
+                  onHoursChange={(h) => {
+                    setDurManual(true);
+                    setDurationHours(h, durationClamped, setDurationMin);
+                  }}
+                  onMinutesChange={(m) => {
+                    setDurManual(true);
+                    setDurationMinutes(m, durationClamped, setDurationMin);
+                  }}
                 />
               </CollapsibleWheel>
 
